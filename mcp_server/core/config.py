@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     passage_snippet_max: int = 800
     sparse_embedding_model: str = "Qdrant/bm42-all-minilm-l6-v2-attentions"
-    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
     duckduckgo_api_key: str = ""
 
     model_config = SettingsConfigDict(

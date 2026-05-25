@@ -4,26 +4,18 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qm
 
 from mcp_server.core.config import Settings
-from mcp_server.services.protocols import SearchHit, VectorStoreInterface
 
 
-class QdrantVectorStore(VectorStoreInterface):
-    def __init__(
-        self,
-        settings: Settings,
-        client: AsyncQdrantClient | None = None,
-    ) -> None:
+class QdrantStore:
+    def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._client = client or AsyncQdrantClient(
+        self._client = AsyncQdrantClient(
             url=settings.qdrant_url,
             check_compatibility=False,
         )
-        self._hybrid_capable: bool | None = None  # cached after first collection check
+        self._hybrid_capable: bool | None = None
 
-    def _build_filter(
-        self,
-        letter_years_filter: list[int] | None,
-    ) -> qm.Filter | None:
+    def _build_filter(self, letter_years_filter: list[int] | None) -> qm.Filter | None:
         if not letter_years_filter:
             return None
         return qm.Filter(
@@ -35,7 +27,7 @@ class QdrantVectorStore(VectorStoreInterface):
             ]
         )
 
-    def _to_hit(self, point: qm.ScoredPoint) -> SearchHit:
+    def _to_hit(self, point: qm.ScoredPoint) -> dict:
         payload = point.payload or {}
         text = str(payload.get("text") or "")
         return {
@@ -47,27 +39,26 @@ class QdrantVectorStore(VectorStoreInterface):
             "source_file": payload.get("source_file"),
         }
 
-    async def _has_named_vectors(self) -> bool:
+    async def _is_hybrid(self) -> bool:
         if self._hybrid_capable is None:
             info = await self._client.get_collection(self._settings.qdrant_collection)
             cfg = info.config.params.vectors
-            # Named-vector collections expose a dict; unnamed expose a single VectorParams
             self._hybrid_capable = isinstance(cfg, dict) and "dense" in cfg
         return self._hybrid_capable
 
     async def search(
         self,
-        query_vector: list[float],
+        dense_vec: list[float],
         *,
-        sparse_vector: dict[int, float] | None = None,
+        sparse_vec: dict[int, float] | None = None,
         top_k: int = 5,
         letter_years_filter: list[int] | None = None,
-    ) -> list[SearchHit]:
+    ) -> list[dict]:
         f = self._build_filter(letter_years_filter)
 
-        if sparse_vector and await self._has_named_vectors():
-            return await self._hybrid_search(query_vector, sparse_vector, top_k, f)
-        return await self._dense_search(query_vector, top_k, f)
+        if sparse_vec and await self._is_hybrid():
+            return await self._hybrid_search(dense_vec, sparse_vec, top_k, f)
+        return await self._dense_search(dense_vec, top_k, f)
 
     async def _hybrid_search(
         self,
@@ -75,30 +66,20 @@ class QdrantVectorStore(VectorStoreInterface):
         sparse_vec: dict[int, float],
         top_k: int,
         f: qm.Filter | None,
-    ) -> list[SearchHit]:
+    ) -> list[dict]:
         qdrant_sparse = qm.SparseVector(
             indices=list(sparse_vec.keys()),
             values=list(sparse_vec.values()),
         )
         prefetch = [
-            qm.Prefetch(
-                query=dense_vec,
-                using="dense",
-                limit=top_k * 3,
-                filter=f,
-            ),
-            qm.Prefetch(
-                query=qdrant_sparse,
-                using="sparse",
-                limit=top_k * 3,
-                filter=f,
-            ),
+            qm.Prefetch(query=dense_vec, using="dense", limit=top_k * 3, filter=f),
+            qm.Prefetch(query=qdrant_sparse, using="sparse", limit=top_k * 3, filter=f),
         ]
         result = await self._client.query_points(
             collection_name=self._settings.qdrant_collection,
             prefetch=prefetch,
             query=qm.FusionQuery(fusion=qm.Fusion.RRF),
-            limit=top_k * 2,  # over-fetch for cross-encoder reranker
+            limit=top_k * 2,
             with_payload=True,
         )
         return [self._to_hit(p) for p in result.points]
@@ -108,7 +89,7 @@ class QdrantVectorStore(VectorStoreInterface):
         query_vector: list[float],
         top_k: int,
         f: qm.Filter | None,
-    ) -> list[SearchHit]:
+    ) -> list[dict]:
         result = await self._client.query_points(
             collection_name=self._settings.qdrant_collection,
             query=query_vector,
@@ -121,7 +102,6 @@ class QdrantVectorStore(VectorStoreInterface):
     async def get_letter_years(self) -> list[int]:
         years: set[int] = set()
         offset = None
-
         while True:
             records, offset = await self._client.scroll(
                 collection_name=self._settings.qdrant_collection,
@@ -137,5 +117,4 @@ class QdrantVectorStore(VectorStoreInterface):
                     years.add(int(year))
             if offset is None:
                 break
-
         return sorted(years)

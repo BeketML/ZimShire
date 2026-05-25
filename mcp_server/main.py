@@ -1,18 +1,33 @@
 """Entry point for the ZimShire MCP microservice.
 
-SSE / streamable-HTTP (for LangGraph graph nodes and Docker):
-    python -m mcp_server.main --transport sse --port 8001
+Run from repo root (required for package imports):
+
+    python -m mcp_server.main
     python -m mcp_server.main --transport streamable-http --port 8001
 
-stdio (for Cursor / Claude Code MCP client):
+stdio (Cursor / Claude Code MCP config):
     python -m mcp_server.main
+
+Do NOT run: cd mcp_server && python main.py  (ModuleNotFoundError: mcp_server)
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
 
-from mcp_server.server import mcp
+# Allow `python mcp_server/main.py` from any cwd
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from mcp_server.core.mcp import mcp
+
+# Register tools — decorators run on import
+import mcp_server.market.tools  # noqa: F401
+import mcp_server.search.tools  # noqa: F401
+import mcp_server.rag.tools     # noqa: F401
 
 
 def main() -> None:
