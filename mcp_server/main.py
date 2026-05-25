@@ -25,10 +25,12 @@ if str(_REPO_ROOT) not in sys.path:
 from mcp_server.core.mcp import mcp
 
 # Register tools — decorators run on import
-import mcp_server.market.tools  # noqa: F401
-import mcp_server.search.tools  # noqa: F401
-import mcp_server.rag.tools     # noqa: F401
-import mcp_server.ui.tools      # noqa: F401
+import mcp_server.market.tools   # noqa: F401
+import mcp_server.search.tools   # noqa: F401
+import mcp_server.rag.tools      # noqa: F401
+import mcp_server.ui.rag_ui      # noqa: F401
+import mcp_server.ui.market_ui   # noqa: F401
+import mcp_server.ui.search_ui   # noqa: F401
 
 
 def main() -> None:
