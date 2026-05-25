@@ -12,7 +12,7 @@ langgraph-checkpoint-postgres
 langchain-core
 langchain-openai
 langchain-mcp-adapters
-fastmcp
+fastmcp[apps]
 litellm
 qdrant-client
 fastembed

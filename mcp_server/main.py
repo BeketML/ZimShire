@@ -28,6 +28,7 @@ from mcp_server.core.mcp import mcp
 import mcp_server.market.tools  # noqa: F401
 import mcp_server.search.tools  # noqa: F401
 import mcp_server.rag.tools     # noqa: F401
+import mcp_server.ui.tools      # noqa: F401
 
 
 def main() -> None:
