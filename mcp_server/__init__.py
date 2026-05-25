@@ -1,0 +1,1 @@
+"""ZimShire MCP microservice (FastMCP)."""

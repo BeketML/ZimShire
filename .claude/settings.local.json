@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\ASUS\\\\Desktop\\\\zimshire\" -Recurse -Directory -Name | Where-Object {$_ -notmatch \"\\(__pycache__|\\\\.py|venv|\\\\.claude|\\\\.egg-info\\)\"})",
+      "PowerShell(Get-Item *)",
+      "WebFetch(domain:qdrant.tech)",
+      "WebFetch(domain:gofastmcp.com)"
+    ]
+  }
+}
