@@ -1,32 +1,28 @@
 from __future__ import annotations
 
 import httpx
-from fastembed import SparseTextEmbedding
-from fastembed.rerank.cross_encoder import TextCrossEncoder
+from fastembed import LateInteractionTextEmbedding, SparseTextEmbedding
 
 from mcp_server.core.config import Settings
 
 
 class DenseEmbedder:
-    def __init__(self, settings: Settings, http_client: httpx.AsyncClient) -> None:
+    def __init__(self, settings: Settings, http_client: httpx.Client) -> None:
         self._settings = settings
         self._http = http_client
 
-    async def embed(self, text: str) -> list[float]:
+    def embed(self, text: str) -> list[float]:
         if not text.strip():
             raise ValueError("Cannot embed empty text")
 
-        headers = {
-            "Authorization": f"Bearer {self._settings.litellm_api_key}",
-            "x-litellm-end-user-id": self._settings.litellm_end_user_id,
-            "Content-Type": "application/json",
-        }
-        payload = {"model": self._settings.embedding_model, "input": text}
-
-        resp = await self._http.post(
+        resp = self._http.post(
             self._settings.embeddings_url,
-            headers=headers,
-            json=payload,
+            headers={
+                "Authorization": f"Bearer {self._settings.litellm_api_key}",
+                "x-litellm-end-user-id": self._settings.litellm_end_user_id,
+                "Content-Type": "application/json",
+            },
+            json={"model": self._settings.embedding_model, "input": text},
             timeout=30.0,
         )
         if resp.status_code >= 400:
@@ -36,26 +32,25 @@ class DenseEmbedder:
 
 
 class SparseEmbedder:
+    """BM25 sparse embedder. Uses query_embed() for queries, embed() for documents."""
+
     def __init__(self, model_name: str) -> None:
         self._model = SparseTextEmbedding(model_name=model_name)
 
-    def embed(self, text: str) -> dict[int, float]:
-        result = next(self._model.embed([text]))
+    def embed_query(self, text: str) -> dict[int, float]:
+        result = next(self._model.query_embed(text))
         return dict(zip(result.indices.tolist(), result.values.tolist()))
 
 
-class Reranker:
-    def __init__(self, model_name: str) -> None:
-        self._model = TextCrossEncoder(model_name=model_name)
+class LateInteractionEmbedder:
+    """ColBERT late interaction embedder for query-time reranking inside Qdrant."""
 
-    def rerank(self, query: str, hits: list[dict], top_k: int) -> list[dict]:
-        if not hits:
-            return hits
-        passages = [h["passage_snippet"] for h in hits]
-        scores = list(self._model.rerank(query, passages))
-        ranked = sorted(zip(hits, scores), key=lambda pair: pair[1], reverse=True)[:top_k]
-        result = []
-        for hit, score in ranked:
-            hit["similarity_score"] = float(score)
-            result.append(hit)
-        return result
+    def __init__(self, model_name: str) -> None:
+        self._model = LateInteractionTextEmbedding(model_name=model_name)
+
+    def embed_query(self, text: str) -> list[list[float]]:
+        import numpy as np
+        result = next(self._model.query_embed(text))
+        if isinstance(result, np.ndarray):
+            return result.tolist()
+        return [v.tolist() if isinstance(v, np.ndarray) else list(v) for v in result]

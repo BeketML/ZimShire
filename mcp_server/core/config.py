@@ -13,9 +13,13 @@ class Settings(BaseSettings):
     litellm_end_user_id: str = ""
     embedding_model: str = "text-embedding-3-small"
     passage_snippet_max: int = 800
-    sparse_embedding_model: str = "Qdrant/bm42-all-minilm-l6-v2-attentions"
-    reranker_model: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+    sparse_embedding_model: str = "qdrant/bm25"
+    reranker_model: str = "answerdotai/answerai-colbert-small-v1"
     duckduckgo_api_key: str = ""
+    # ColBERT / hybrid search constants — not in .env, stable values
+    late_interaction_vector_name: str = "multi"
+    colbert_embedding_dim: int = 96
+    hybrid_prefetch_limit: int = 20
 
     model_config = SettingsConfigDict(
         env_file=str(REPO_ROOT / ".env"),

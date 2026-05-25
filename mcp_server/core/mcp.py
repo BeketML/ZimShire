@@ -18,9 +18,7 @@ def get_http_client() -> httpx.AsyncClient:
 async def lifespan(app: FastMCP):
     global _http_client
     _http_client = httpx.AsyncClient(timeout=30.0)
-
     yield
-
     await _http_client.aclose()
     _http_client = None
 
