@@ -10,19 +10,25 @@ from mcp_server.core.mcp import mcp
 def search_buffett_letters_ui(
     query: str,
     top_k: int = 5,
-    letter_years_filter: list[int] | None = None,
+    letter_years_filter: str | None = None,
 ) -> PrefabApp:
-    """Visual search over Buffett letters. Returns hybrid RAG results as a searchable table."""
+    """Visual search over Buffett letters. Returns hybrid RAG results as a searchable table.
+    letter_years_filter: single year or comma-separated years, e.g. '1988' or '1988,1989'."""
     from mcp_server.rag.tools import search_buffett_letters
 
-    results = search_buffett_letters(query, top_k, letter_years_filter)
+    years: list[int] | None = None
+    if letter_years_filter:
+        years = [int(y.strip()) for y in letter_years_filter.split(",") if y.strip().isdigit()]
+
+    results = search_buffett_letters(query, top_k, years)
 
     with PrefabApp() as ui:
         with Column():
             DataTable(
                 columns=[
-                    DataTableColumn(key="letter_year",      header="Year",    sortable=True),
-                    DataTableColumn(key="similarity_score", header="Score",   sortable=True, format="number:4"),
+                    DataTableColumn(key="letter_year",      header="Year",         sortable=True),
+                    DataTableColumn(key="similarity_score", header="Cosine",       sortable=True, format="number:4"),
+                    DataTableColumn(key="rerank_score",     header="Rerank",       sortable=True, format="number:2"),
                     DataTableColumn(key="chunk_index",      header="Chunk"),
                     DataTableColumn(key="passage_snippet",  header="Passage"),
                     DataTableColumn(key="source_file",      header="Source"),

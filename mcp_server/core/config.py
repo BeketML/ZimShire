@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     litellm_api_key: str = ""
     litellm_end_user_id: str = ""
     embedding_model: str = "text-embedding-3-small"
-    passage_snippet_max: int = 800
     sparse_embedding_model: str = "qdrant/bm25"
     reranker_model: str = "answerdotai/answerai-colbert-small-v1"
     duckduckgo_api_key: str = ""

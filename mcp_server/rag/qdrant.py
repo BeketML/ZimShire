@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
@@ -31,13 +32,35 @@ class QdrantStore:
             ]
         )
 
-    def _to_hit(self, point: qm.ScoredPoint) -> dict:
+    def _dense_cosine(self, query_vec: list[float], point_ids: list) -> dict:
+        """Fetch dense vectors for point_ids and compute cosine similarity with query_vec."""
+        q = np.array(query_vec, dtype=np.float32)
+        q_norm = q / (np.linalg.norm(q) or 1.0)
+
+        records = self._client.retrieve(
+            collection_name=self._settings.qdrant_collection,
+            ids=point_ids,
+            with_vectors=["dense"],
+        )
+        result: dict[str, float] = {}
+        for rec in records:
+            vec = rec.vector.get("dense") if isinstance(rec.vector, dict) else None
+            if vec:
+                d = np.array(vec, dtype=np.float32)
+                d_norm = d / (np.linalg.norm(d) or 1.0)
+                result[str(rec.id)] = float(np.dot(q_norm, d_norm))
+        return result
+
+    def _to_hit(self, point: qm.ScoredPoint, dense_cosine: float | None = None) -> dict:
         payload = point.payload or {}
         text = str(payload.get("text") or "")
+        raw_score = float(point.score)
+        similarity = dense_cosine if dense_cosine is not None else raw_score
         return {
             "letter_year": int(payload.get("letter_year") or payload.get("year") or 0),
-            "passage_snippet": text[: self._settings.passage_snippet_max],
-            "similarity_score": float(point.score),
+            "passage_snippet": text,
+            "similarity_score": round(similarity, 6),
+            "rerank_score": round(raw_score, 4),
             "qdrant_point_id": str(point.id),
             "chunk_index": payload.get("chunk_index"),
             "source_file": payload.get("source_file"),
@@ -111,7 +134,10 @@ class QdrantStore:
             limit=top_k,
             with_payload=True,
         )
-        return [self._to_hit(p) for p in result.points]
+        points = result.points
+        point_ids = [p.id for p in points]
+        cosine_map = self._dense_cosine(dense_vec, point_ids)
+        return [self._to_hit(p, dense_cosine=cosine_map.get(str(p.id))) for p in points]
 
     def _hybrid_rrf(
         self,

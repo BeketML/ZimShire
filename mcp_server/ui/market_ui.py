@@ -8,7 +8,7 @@ from prefab_ui.components import (
     Metric,
     Row,
 )
-from prefab_ui.components.charts import BarChart, ChartSeries, LineChart
+from prefab_ui.components.charts import ChartSeries, LineChart
 
 from mcp_server.core.mcp import mcp
 
@@ -192,69 +192,6 @@ async def get_cashflow_ui(ticker: str, quarterly: bool = False) -> PrefabApp:
     return ui
 
 
-# ── Analyst targets ────────────────────────────────────────────────────────
-
-@mcp.tool(name="get_analyst_targets_ui", app=True, tags={"market", "analysis", "ui"})
-async def get_analyst_targets_ui(ticker: str) -> PrefabApp:
-    """Analyst price targets consensus as metric cards: current, low, high, mean, median."""
-    from mcp_server.market.tools import get_analyst_targets
-
-    d = await get_analyst_targets(ticker)
-
-    def _fmt(v: object) -> str:
-        if v is None:
-            return "—"
-        try:
-            return f"${float(v):,.2f}"
-        except (TypeError, ValueError):
-            return str(v)
-
-    target_fields = [
-        ("Current",  d.get("current")),
-        ("Low",      d.get("low")),
-        ("High",     d.get("high")),
-        ("Mean",     d.get("mean")),
-        ("Median",   d.get("median")),
-    ]
-
-    with PrefabApp() as ui:
-        with Column():
-            with Row():
-                for label, value in target_fields:
-                    Metric(label=label, value=_fmt(value))
-            _kv_table(_kv_rows(d))
-    return ui
-
-
-# ── Recommendations ────────────────────────────────────────────────────────
-
-@mcp.tool(name="get_recommendations_ui", app=True, tags={"market", "analysis", "ui"})
-async def get_recommendations_ui(ticker: str) -> PrefabApp:
-    """Analyst recommendations by period as a stacked bar chart."""
-    from mcp_server.market.tools import get_recommendations
-
-    data = await get_recommendations(ticker)
-
-    with PrefabApp() as ui:
-        with Column():
-            if data:
-                BarChart(
-                    data=data,
-                    series=[
-                        ChartSeries(data_key="strongBuy",  label="Strong Buy"),
-                        ChartSeries(data_key="buy",        label="Buy"),
-                        ChartSeries(data_key="hold",       label="Hold"),
-                        ChartSeries(data_key="sell",       label="Sell"),
-                        ChartSeries(data_key="strongSell", label="Strong Sell"),
-                    ],
-                    x_axis="period",
-                    stacked=True,
-                    height=300,
-                )
-            _auto_table(data)
-    return ui
-
-
 # ── Earnings estimate ──────────────────────────────────────────────────────
 
 @mcp.tool(name="get_earnings_estimate_ui", app=True, tags={"market", "analysis", "ui"})
@@ -268,21 +205,6 @@ async def get_earnings_estimate_ui(ticker: str) -> PrefabApp:
     with PrefabApp() as ui:
         with Column():
             DataTable(columns=columns, rows=rows, search=True)
-    return ui
-
-
-# ── Upgrades / downgrades ──────────────────────────────────────────────────
-
-@mcp.tool(name="get_upgrades_downgrades_ui", app=True, tags={"market", "analysis", "ui"})
-async def get_upgrades_downgrades_ui(ticker: str) -> PrefabApp:
-    """Analyst rating changes: date, firm, from grade, to grade, action."""
-    from mcp_server.market.tools import get_upgrades_downgrades
-
-    data = await get_upgrades_downgrades(ticker)
-
-    with PrefabApp() as ui:
-        with Column():
-            _auto_table(data, search=True, paginated=True)
     return ui
 
 
@@ -331,43 +253,6 @@ async def get_stock_news_ui(ticker: str, count: int = 10) -> PrefabApp:
     return ui
 
 
-# ── Market summary ─────────────────────────────────────────────────────────
-
-@mcp.tool(name="get_market_summary_ui", app=True, tags={"market", "macro", "ui"})
-async def get_market_summary_ui(market: str = "US") -> PrefabApp:
-    """Market-wide summary: indices, gainers/losers, crypto, commodities, currencies."""
-    from mcp_server.market.tools import get_market_summary
-
-    raw = await get_market_summary(market)
-    rows = _kv_rows(raw)
-
-    with PrefabApp() as ui:
-        with Column():
-            _kv_table(rows)
-    return ui
-
-
-# ── Calendar events ────────────────────────────────────────────────────────
-
-@mcp.tool(name="get_calendar_events_ui", app=True, tags={"market", "macro", "ui"})
-async def get_calendar_events_ui(days_ahead: int = 7) -> PrefabApp:
-    """Upcoming market events: earnings releases, IPOs, stock splits."""
-    from mcp_server.market.tools import get_calendar_events
-
-    data = await get_calendar_events(days_ahead)
-    rows: list[dict] = []
-    for event_type, events in data.items():
-        for event in events or []:
-            row: dict = {"type": event_type}
-            row.update({k: str(v)[:120] if v is not None else "" for k, v in event.items()})
-            rows.append(row)
-
-    with PrefabApp() as ui:
-        with Column():
-            _auto_table(rows, search=True, paginated=True)
-    return ui
-
-
 # ── Lookup ticker ──────────────────────────────────────────────────────────
 
 @mcp.tool(name="lookup_ticker_ui", app=True, tags={"market", "screener", "ui"})
@@ -383,48 +268,3 @@ async def lookup_ticker_ui(query: str) -> PrefabApp:
     return ui
 
 
-# ── Screen stocks ──────────────────────────────────────────────────────────
-
-@mcp.tool(name="screen_stocks_ui", app=True, tags={"market", "screener", "ui"})
-async def screen_stocks_ui(
-    sector: str | None = None,
-    region: str = "us",
-    size: int = 20,
-) -> PrefabApp:
-    """Screen stocks by region and optional sector."""
-    from mcp_server.market.tools import screen_stocks
-
-    data = await screen_stocks(sector, region, size)
-
-    with PrefabApp() as ui:
-        with Column():
-            _auto_table(data, search=True, paginated=True)
-    return ui
-
-
-# ── Legacy get_market_data ─────────────────────────────────────────────────
-
-@mcp.tool(name="get_market_data_ui", app=True, tags={"market", "ui"})
-async def get_market_data_ui(ticker: str, data_type: str = "info") -> PrefabApp:
-    """Visual market data for a ticker. data_type: info | financials | history."""
-    from mcp_server.market.tools import get_market_data
-
-    raw = await get_market_data(ticker, data_type)
-
-    if isinstance(raw, dict):
-        rows = _kv_rows(raw)
-        columns = [
-            DataTableColumn(key="field", header="Field", sortable=True),
-            DataTableColumn(key="value", header="Value"),
-        ]
-    elif isinstance(raw, list):
-        rows = raw
-        columns = [DataTableColumn(key=k, header=k) for k in (rows[0].keys() if rows else [])]
-    else:
-        rows = [{"result": str(raw)}]
-        columns = [DataTableColumn(key="result", header="Result")]
-
-    with PrefabApp() as ui:
-        with Column():
-            DataTable(columns=columns, rows=rows, search=True, paginated=True)
-    return ui

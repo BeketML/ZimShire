@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta
 from typing import Any
 
 import yfinance as yf
@@ -111,37 +110,12 @@ async def get_cashflow(ticker: str, quarterly: bool = False) -> dict:
 # Analysis                                                             #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="get_analyst_targets", tags={"market", "finance", "analysis"})
-async def get_analyst_targets(ticker: str) -> dict:
-    """Analyst price targets consensus: current, low, high, mean, median."""
-    def _fetch():
-        targets = yf.Ticker(ticker).analyst_price_targets
-        return _to_json(dict(targets)) if targets is not None else {}
-    return await _run(_fetch)
-
-
-@mcp.tool(name="get_recommendations", tags={"market", "finance", "analysis"})
-async def get_recommendations(ticker: str) -> list[dict]:
-    """Analyst recommendations summary by period: strongBuy, buy, hold, sell, strongSell counts."""
-    return await _run(
-        lambda: _df_to_records(yf.Ticker(ticker).recommendations_summary)
-    )
-
-
 @mcp.tool(name="get_earnings_estimate", tags={"market", "finance", "analysis"})
 async def get_earnings_estimate(ticker: str) -> dict:
     """Forward EPS estimates: current quarter (0q), next quarter (+1q), current year (0y), next year (+1y).
     Includes number of analysts, average, low, high, year-ago EPS, growth."""
     return await _run(
         lambda: _df_to_dict(yf.Ticker(ticker).earnings_estimate)
-    )
-
-
-@mcp.tool(name="get_upgrades_downgrades", tags={"market", "finance", "analysis"})
-async def get_upgrades_downgrades(ticker: str) -> list[dict]:
-    """History of analyst rating changes: date, firm, from grade, to grade, action."""
-    return await _run(
-        lambda: _df_to_records(yf.Ticker(ticker).upgrades_downgrades)
     )
 
 
@@ -178,40 +152,6 @@ async def get_stock_news(ticker: str, count: int = 10) -> list[dict]:
 
 
 # ------------------------------------------------------------------ #
-# Macro                                                                #
-# ------------------------------------------------------------------ #
-
-@mcp.tool(name="get_market_summary", tags={"market", "macro"})
-async def get_market_summary(market: str = "US") -> dict:
-    """Market-wide summary: major indices, gainers/losers, crypto, commodities, currencies.
-    market: US / GB / ASIA / EUROPE / RATES / COMMODITIES / CURRENCIES / CRYPTOCURRENCIES."""
-    return await _run(
-        lambda: _to_json(yf.Market(market).summary or {})
-    )
-
-
-@mcp.tool(name="get_calendar_events", tags={"market", "macro"})
-async def get_calendar_events(days_ahead: int = 7) -> dict:
-    """Upcoming market events: earnings releases, IPOs, stock splits.
-    days_ahead: number of days to look ahead (default 7)."""
-    def _fetch():
-        end = datetime.now() + timedelta(days=days_ahead)
-        cal = yf.Calendars(end=end)
-        result: dict = {}
-        for key, method in (
-            ("earnings", cal.get_earnings_calendar),
-            ("ipo", cal.get_ipo_info_calendar),
-            ("splits", cal.get_splits_calendar),
-        ):
-            try:
-                result[key] = _df_to_records(method())
-            except Exception:
-                result[key] = []
-        return result
-    return await _run(_fetch)
-
-
-# ------------------------------------------------------------------ #
 # Screener / discovery                                                 #
 # ------------------------------------------------------------------ #
 
@@ -229,42 +169,3 @@ async def lookup_ticker(query: str) -> list[dict]:
     return await _run(_fetch)
 
 
-@mcp.tool(name="screen_stocks", tags={"market", "screener"})
-async def screen_stocks(
-    sector: str | None = None,
-    region: str = "us",
-    size: int = 20,
-) -> list[dict]:
-    """Screen stocks by region and optional sector.
-    sector: technology / financial-services / healthcare / consumer-cyclical / ...
-    region: us / gb / de / jp / ...
-    size: number of results (default 20, max 250)."""
-    def _fetch():
-        query = yf.EquityQuery("eq", ["region", region])
-        if sector:
-            query = yf.EquityQuery("and", [query, yf.EquityQuery("eq", ["sector", sector])])
-        result = yf.screen(query, size=size)
-        return _to_json((result or {}).get("quotes", []))
-    return await _run(_fetch)
-
-
-# ------------------------------------------------------------------ #
-# Backward compat                                                      #
-# ------------------------------------------------------------------ #
-
-@mcp.tool(name="get_market_data", tags={"market", "finance", "yfinance"})
-async def get_market_data(ticker: str, data_type: str = "info") -> dict:
-    """Fetch stock market data via yfinance. data_type: info | financials | history."""
-    _legacy = ("info", "financials", "history")
-
-    def _fetch():
-        if data_type not in _legacy:
-            raise ValueError(f"Unsupported data_type {data_type!r}. Choose from: {_legacy}")
-        t = yf.Ticker(ticker)
-        if data_type == "info":
-            return _to_json(dict(t.info))
-        if data_type == "financials":
-            return _df_to_dict(t.financials)
-        return _to_json(t.history(period="1mo").reset_index().to_dict(orient="records"))
-
-    return await _run(_fetch)
