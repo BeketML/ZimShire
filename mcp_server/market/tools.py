@@ -25,6 +25,8 @@ def _df_to_records(df: Any) -> list[dict]:
 def _df_to_dict(df: Any) -> dict:
     if df is None or (hasattr(df, "empty") and df.empty):
         return {}
+    df = df.copy()
+    df.columns = df.columns.astype(str)
     return _to_json(df.to_dict())
 
 
@@ -46,11 +48,18 @@ async def get_stock_info(ticker: str) -> dict:
 
 @mcp.tool(name="get_stock_price", tags={"market", "finance", "fundamentals"})
 async def get_stock_price(ticker: str) -> dict:
-    """Fast current price data: last price, previous close, 52-week high/low, market cap, shares outstanding.
+    """Fast current price data: lastPrice, previousClose, yearHigh, yearLow, marketCap, shares, dayHigh, dayLow.
     Faster than get_stock_info — use when only price is needed."""
     def _fetch():
         fi = yf.Ticker(ticker).fast_info
-        return _to_json({k: getattr(fi, k, None) for k in fi.__dict__})
+        keys = list(fi.keys()) if hasattr(fi, "keys") else []
+        result = {}
+        for k in keys:
+            try:
+                result[k] = fi[k]
+            except Exception:
+                pass
+        return _to_json(result)
     return await _run(_fetch)
 
 

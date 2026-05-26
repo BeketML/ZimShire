@@ -63,13 +63,23 @@ zimshire/
     db/
     repositories/
   mcp_server/                   # separate process (renamed from `mcp/` to avoid clashing with the official `mcp` SDK that fastmcp depends on)
-    main.py
-    server.py
-    core/config.py
-    services/
-      qdrant.py
-      yfinance_market.py
-      search.py
+    main.py                     # entry point; registers all tools via imports
+    core/
+      mcp.py                    # shared FastMCP instance
+      config.py                 # Settings (qdrant, litellm, serpapi, hybrid search params)
+    rag/
+      tools.py                  # search_buffett_letters (hybrid RAG)
+      qdrant.py                 # QdrantStore — dense / hybrid+RRF / full+ColBERT search
+      embeddings.py             # DenseEmbedder, SparseEmbedder (BM25), LateInteractionEmbedder (ColBERT)
+    market/
+      tools.py                  # 11 yfinance tools (stock info, price, history, financials, holders, news)
+    search/
+      tools.py                  # web_search, web_search_news, web_search_knowledge (SerpApi/DuckDuckGo)
+      models.py                 # TypedDicts for search result shapes
+    ui/
+      rag_ui.py                 # search_buffett_letters_ui (prefab_ui DataTable)
+      market_ui.py              # get_stock_*_ui, get_*_ui tools (metrics, charts, tables)
+      search_ui.py              # web_search_ui, web_search_news_ui, web_search_knowledge_ui
   scripts/
     ingest_letters.py
   tests/
@@ -91,7 +101,7 @@ pytest tests/ -v
 
 # Local dev (without Docker for app services)
 docker compose up -d postgres qdrant
-python -m mcp_server.main --transport sse --port 8001
+python -m mcp_server.main --transport streamable-http --port 8001
 uvicorn app.main:app --reload --port 8000
 
 # Cursor / Claude Code MCP client
@@ -118,7 +128,7 @@ All real values go in root `.env` (never commit). Variable names only:
 | `LANGFUSE_BASE_URL` | Langfuse |
 | `DATABASE_URL` | Postgres |
 | `QDRANT_URL` | Qdrant |
-| `DUCKDUCKGO_API_KEY` | Web search (DuckDuckGo API in `mcp_server/services/search.py`) |
+| `DUCKDUCKGO_API_KEY` | SerpApi key used to query DuckDuckGo (`mcp_server/search/tools.py`) |
 | `MCP_BASE_URL` | Internal MCP endpoint, e.g. `http://localhost:8001` (docker: `http://mcp:8001`) |
 | `MCP_PORT` | MCP listen port (default `8001`) |
 
@@ -188,7 +198,7 @@ class ZimShireState(TypedDict):
 3. One Qdrant search → **k rows** in `rag_retrievals` (same `message_id`, different `qdrant_point_id`).
 4. **`grounded = false`** when `rag_invoked` but `rag_agent_chunks` empty or fewer than 2 strong hits (score ≥ 0.75).
 5. MCP tools = data only. Guardrails, `grounded`, synthesis stay in FastAPI + LangGraph.
-6. Graph nodes call MCP tools via `app/graph/mcp_client.py` and `MCP_BASE_URL`. **`mcp_server/services/` is only imported inside `mcp_server/server.py`.**
+6. Graph nodes call MCP tools via `app/graph/mcp_client.py` and `MCP_BASE_URL`. **Direct import of anything under `mcp_server/` in graph nodes is forbidden.**
 7. **`draft_answer` never reaches the client before `output_guardrail` completes.** Orchestrator uses `ainvoke`; SSE streaming happens in FastAPI after the graph completes.
 8. **Langfuse trace is created for every request** — including cache hits (one span `cache_hit`).
 
@@ -257,27 +267,45 @@ Multi-turn: skip stages 1–2; start at stage 3.
 
 ## Qdrant — Buffett letters
 
-- Collection: `buffett_letters`, cosine distance, dim = 1536 (text-embedding-3-small)
+- Collection: `buffett_letters`, cosine distance
+- Vector spaces: `dense` (dim=1536, text-embedding-3-small), `sparse` (BM25 via fastembed), `multi` (ColBERT dim=96, answerdotai/answerai-colbert-small-v1)
+- Collection mode auto-detected at runtime: `full` (all three) → prefetch dense+sparse, rerank with ColBERT; `hybrid` (dense+sparse) → RRF fusion; `dense` → single-vector search
 - Chunk size: 800–1200 tokens, overlap 100–150 tokens
 - Point ID: `uuid5(namespace, f"{letter_year}:{chunk_index}")` — deterministic for idempotent re-ingest
 - Payload fields: `letter_year`, `chunk_index`, `text`, `source_file`
 - Payload index on `letter_year` for year filters
-- Search: `query_points` with `limit=top_k` (default 5); optional `MatchAny` filter on `letter_years_filter`
-- Optional: Grouping API (`group_by="letter_year"`) for year diversity
+- Search result fields: `letter_year`, `passage_snippet`, `similarity_score` (dense cosine), `rerank_score` (ColBERT/RRF), `qdrant_point_id`, `chunk_index`, `source_file`
+- Hybrid prefetch limit: 20 candidates per vector type before reranking
 
 ---
 
 ## MCP server (Task 4)
 
-Two processes: `uvicorn app.main:app` (port 8000) and `python -m mcp_server.main --transport sse --port 8001` (data tools only).
+Two processes: `uvicorn app.main:app` (port 8000) and `python -m mcp_server.main --transport streamable-http --port 8001` (data tools only).
 
-**Required tools:**
+Tools are registered via `@mcp.tool` decorators and imported in `mcp_server/main.py`. The `mcp_server/core/mcp.py` module holds the shared FastMCP instance.
 
-| Tool | Delegates to |
-|------|-------------|
-| `search_buffett_letters(query, top_k)` | `mcp_server/services/qdrant.py` |
-| `get_market_data(ticker, data_type)` | `mcp_server/services/yfinance_market.py` |
-| `web_search(query, max_results)` | `mcp_server/services/search.py` |
+**Data tools:**
+
+| Tool | Module | Description |
+|------|--------|-------------|
+| `search_buffett_letters(query, top_k, letter_years_filter)` | `rag/tools.py` | Hybrid RAG: dense+sparse prefetch, ColBERT rerank |
+| `get_stock_info(ticker)` | `market/tools.py` | Full company overview (sector, P/E, EPS, description) |
+| `get_stock_price(ticker)` | `market/tools.py` | Fast price snapshot (last, prev close, 52W high/low) |
+| `get_stock_history(ticker, period, interval)` | `market/tools.py` | OHLCV history |
+| `get_income_statement(ticker, quarterly)` | `market/tools.py` | Revenue, gross profit, EBITDA, net income |
+| `get_balance_sheet(ticker, quarterly)` | `market/tools.py` | Assets, debt, cash, equity |
+| `get_cashflow(ticker, quarterly)` | `market/tools.py` | Operating cash flow, capex, free cash flow |
+| `get_earnings_estimate(ticker)` | `market/tools.py` | Forward EPS estimates |
+| `get_institutional_holders(ticker)` | `market/tools.py` | Top institutional holders |
+| `get_insider_transactions(ticker)` | `market/tools.py` | Recent insider buy/sell |
+| `get_stock_news(ticker, count)` | `market/tools.py` | Latest Yahoo Finance news |
+| `lookup_ticker(query)` | `market/tools.py` | Ticker lookup by company name |
+| `web_search(query, max_results, region, date_filter)` | `search/tools.py` | Organic search via SerpApi/DuckDuckGo |
+| `web_search_news(query, max_results, region, date_filter)` | `search/tools.py` | News search via SerpApi/DuckDuckGo |
+| `web_search_knowledge(query)` | `search/tools.py` | Knowledge Graph card via SerpApi/DuckDuckGo |
+
+**UI tools** (Claude Code `prefab_ui` apps, `app=True`): mirror for each data tool in `mcp_server/ui/` — `search_buffett_letters_ui`, `get_stock_info_ui`, `get_stock_price_ui`, `get_stock_history_ui`, `get_income_statement_ui`, `get_balance_sheet_ui`, `get_cashflow_ui`, `get_earnings_estimate_ui`, `get_institutional_holders_ui`, `get_insider_transactions_ui`, `get_stock_news_ui`, `lookup_ticker_ui`, `web_search_ui`, `web_search_news_ui`, `web_search_knowledge_ui`.
 
 **Do NOT expose via MCP:** full graph, guardrails, `rag_retrievals`, semantic cache, LiteLLM synthesis.
 
@@ -285,7 +313,7 @@ Two processes: `uvicorn app.main:app` (port 8000) and `python -m mcp_server.main
 
 | Client | Transport | Endpoint |
 |--------|-----------|----------|
-| LangGraph graph nodes (internal) | SSE / streamable HTTP | `http://mcp:8001/mcp` |
+| LangGraph graph nodes (internal) | streamable-http | `http://mcp:8001/mcp` |
 | Cursor / Claude Code | stdio | `python -m mcp_server.main` |
 
 Graph nodes call MCP via `app/graph/mcp_client.py` (`MultiServerMCPClient`). Client is initialised once in FastAPI lifespan and shared across all concurrent requests.
@@ -336,7 +364,7 @@ Node spans: `load_memory`, `orchestrator`, `rag_retrieval`, `market_data`, `web_
 1. Register → chat → streamed answer with `sources` and `grounded`
 2. Multi-turn via same `str(chat_id)` checkpoint key
 3. Guardrails: block bad input, rewrite bad output, faithfulness check
-4. MCP: three tools, separate process
+4. MCP: tools in separate process, data-only boundary respected
 5. Langfuse: full trace per message
 6. `docker compose up` + ingest + tests on clean machine
 7. `rag_retrievals`: N rows for N Qdrant hits on letter queries
@@ -350,8 +378,8 @@ Node spans: `load_memory`, `orchestrator`, `rag_retrieval`, `market_data`, `web_
 - Set `used_in_response` when persisting (snippet match or attribution step).
 - Do not commit API keys or secret values to source files.
 - README required for submission (Phase 11) with architecture diagram, setup instructions, endpoint reference, and design decision tradeoffs.
-- **MCP tool calls only:** `rag.py`, `market.py`, `web.py` call MCP tools via `get_mcp_tools()` from `mcp_client.py`. Direct import of `mcp_server/services/` in graph nodes is forbidden.
-- **`mcp_server/services/` boundary:** `qdrant.py`, `yfinance_market.py`, `search.py` are imported **only** in `mcp_server/server.py`.
+- **MCP tool calls only:** `subagents.py` calls MCP tools via `get_mcp_tools()` from `mcp_client.py`. Direct import of anything under `mcp_server/` from `app/` is forbidden.
+- **`mcp_server/` subpackage boundary:** each subpackage (`rag/`, `market/`, `search/`) is self-contained. UI tools in `mcp_server/ui/` may call within their corresponding data module (local import). No cross-subpackage imports.
 - **Synthesizer uses `ainvoke`** — never `astream`. Full `draft_answer` is buffered in graph state; client streaming happens in FastAPI after guardrails complete (Stage 9.5).
 - **Langfuse trace on every request** — including cache hits. Cache hit trace has one span `cache_hit` (no LLM cost). Store `trace.id` on `messages.langfuse_trace_id`.
 - **Docker 4 services:** `postgres`, `qdrant`, `mcp` (:8001), `api` (:8000). `api` depends on `mcp`. Use `docker compose up -d` for all.
