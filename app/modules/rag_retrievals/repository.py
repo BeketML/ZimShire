@@ -44,6 +44,21 @@ async def bulk_create(
     return len(rows)
 
 
+async def list_for_chat(
+    session: AsyncSession, chat_id: UUID, *, limit: int = 200
+) -> list[RagRetrieval]:
+    from app.models.models import Message  # local import to avoid circularity
+
+    rows = await session.scalars(
+        select(RagRetrieval)
+        .join(Message, RagRetrieval.message_id == Message.message_id)
+        .where(Message.chat_id == chat_id)
+        .order_by(RagRetrieval.created_at.desc())
+        .limit(limit)
+    )
+    return list(rows)
+
+
 async def list_for_message(session: AsyncSession, message_id: UUID) -> list[RagRetrieval]:
     rows = await session.scalars(
         select(RagRetrieval)

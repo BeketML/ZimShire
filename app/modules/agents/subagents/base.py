@@ -49,12 +49,16 @@ def extract_artifacts(agent: AgentName, messages: list) -> dict[str, Any]:
             continue
         payload = _parse_tool_content(msg.content)
         if agent == "rag":
-            if isinstance(payload, list):
+            if isinstance(payload, dict):
+                artifacts["rag_chunks"].append(payload)
+            elif isinstance(payload, list):
                 for item in payload:
                     if isinstance(item, dict):
                         artifacts["rag_chunks"].append(item)
         elif agent == "web":
-            if isinstance(payload, list):
+            if isinstance(payload, dict):
+                artifacts["web_sources"].append(payload)
+            elif isinstance(payload, list):
                 for item in payload:
                     if isinstance(item, dict):
                         artifacts["web_sources"].append(item)

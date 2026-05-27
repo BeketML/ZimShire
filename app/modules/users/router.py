@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db
@@ -15,10 +15,12 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
-    body: UserCreate = UserCreate(),
+    body: UserCreate | None = Body(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
-    user = await service.create_user(db, name=body.name, surname=body.surname)
+    name = body.name if body else None
+    surname = body.surname if body else None
+    user = await service.create_user(db, name=name, surname=surname)
     return UserResponse.model_validate(user)
 
 

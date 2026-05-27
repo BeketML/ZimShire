@@ -5,7 +5,7 @@ import json
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,7 +41,7 @@ router = APIRouter(prefix="/chats", tags=["messages"])
 @router.get("/{chat_id}/messages", response_model=HistoryResponse)
 async def list_messages(
     chat_id: UUID,
-    user_id: UUID,
+    user_id: UUID = Query(..., description="Owner user_id for ownership verification"),
     db: AsyncSession = Depends(get_db),
 ) -> HistoryResponse:
     chat = await get_chat(db, chat_id)

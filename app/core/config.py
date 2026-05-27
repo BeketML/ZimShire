@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     default_chat_model: str = "gpt-4o-mini"
     default_provider: str = "openai"
     orchestrator_model: str = "claude-sonnet-4-6"
-    subagent_model: str = "claude-sonnet-4-6"
+    subagent_model: str = "claude-haiku-4-5"
     guardrail_model: str = "gpt-4o-mini"
     memory_model: str = "claude-haiku-4-5"
     embedding_model: str = "text-embedding-3-small"

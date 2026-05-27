@@ -8,7 +8,7 @@ from sqlalchemy import bindparam, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import MarketDataCache, SemanticCache
+from app.models.models import MarketDataCache, SemanticCache  # noqa: F401 (re-exported)
 
 MARKET_DEFAULT_TTL = timedelta(hours=1)
 SEMANTIC_SIMILARITY_THRESHOLD = 0.92
@@ -68,7 +68,8 @@ async def find_similar(
         LIMIT 1
         """
     ).bindparams(bindparam("embedding"))
-    res = await session.execute(stmt, {"embedding": embedding})
+    embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+    res = await session.execute(stmt, {"embedding": embedding_str})
     row = res.first()
     if row is None or float(row.similarity) < SEMANTIC_SIMILARITY_THRESHOLD:
         return None
@@ -76,6 +77,24 @@ async def find_similar(
     if cache_row is None:
         return None
     return cache_row, float(row.similarity)
+
+
+async def list_semantic(
+    session: AsyncSession, *, limit: int = 50
+) -> list[SemanticCache]:
+    rows = await session.scalars(
+        select(SemanticCache).order_by(SemanticCache.expires_at.desc().nullslast()).limit(limit)
+    )
+    return list(rows)
+
+
+async def list_market(
+    session: AsyncSession, *, limit: int = 100
+) -> list[MarketDataCache]:
+    rows = await session.scalars(
+        select(MarketDataCache).order_by(MarketDataCache.fetched_at.desc()).limit(limit)
+    )
+    return list(rows)
 
 
 async def bump_hit(session: AsyncSession, cache_id) -> None:

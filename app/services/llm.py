@@ -9,11 +9,16 @@ from app.core.config import settings
 
 
 @lru_cache(maxsize=32)
-def get_chat_model(model: str | None = None, temperature: float = 0.2) -> ChatOpenAI:
-    """Generic model factory — cached by (model, temperature)."""
+def get_chat_model(
+    model: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int | None = None,
+) -> ChatOpenAI:
+    """Generic model factory — cached by (model, temperature, max_tokens)."""
     return ChatOpenAI(
         model=model or settings.default_chat_model,
         temperature=temperature,
+        max_tokens=max_tokens,
         api_key=settings.litellm_api_key,
         base_url=settings.litellm_base_url,
         default_headers={"x-litellm-end-user-id": settings.litellm_end_user_id},
@@ -21,8 +26,8 @@ def get_chat_model(model: str | None = None, temperature: float = 0.2) -> ChatOp
 
 
 def get_orchestrator_model(model_override: str | None = None) -> ChatOpenAI:
-    """Planner + synthesizer — Claude via LiteLLM."""
-    return get_chat_model(model_override or settings.orchestrator_model, temperature=0.2)
+    """Planner + synthesizer — Claude via LiteLLM, capped to prevent runaway responses."""
+    return get_chat_model(model_override or settings.orchestrator_model, temperature=0.2, max_tokens=1500)
 
 
 def get_subagent_model(model_override: str | None = None) -> ChatOpenAI:
