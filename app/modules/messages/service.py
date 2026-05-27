@@ -1,21 +1,40 @@
 """Stage 10 — persist the completed graph turn to Postgres."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import timedelta
 from uuid import UUID
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Message
 from app.modules.cache.gateways import write_semantic
+from app.modules.chat_history.long_term.service import LongTermMemoryService
+from app.modules.chat_history.short_term.service import ShortTermMemoryService
 from app.modules.chats.repository import touch_chat
 from app.modules.messages.repository import create_assistant_message
 from app.modules.rag_retrievals.repository import bulk_create as bulk_create_rag
 from app.services.embedding import embed_text
 
 logger = logging.getLogger(__name__)
+
+_short_term_svc = ShortTermMemoryService()
+
+
+def _extract_market_tickers(final_state: dict) -> list[str]:
+    market_text = (final_state.get("collected_context") or {}).get("market", "")
+    if not market_text:
+        return []
+    try:
+        parsed = json.loads(market_text)
+        if isinstance(parsed, dict):
+            return list(parsed.keys())
+    except json.JSONDecodeError:
+        pass
+    return []
 
 
 async def persist_assistant_turn(
@@ -74,26 +93,35 @@ async def persist_assistant_turn(
         except Exception as exc:
             logger.warning("semantic_cache insert failed: %s", exc)
 
-    # 4. Long-term memory: aput per ticker from market context
-    if store is not None:
-        market_text = (final_state.get("collected_context") or {}).get("market", "")
-        tickers: list[str] = []
-        if market_text:
-            try:
-                parsed = json.loads(market_text)
-                if isinstance(parsed, dict):
-                    tickers = list(parsed.keys())
-            except json.JSONDecodeError:
-                pass
-        for ticker in tickers:
-            try:
-                await store.aput(
-                    ("users", str(user_id), "interests"),
-                    key=ticker,
-                    value={"company": ticker, "interest": user_query},
+    # 4. Long-term memory (skip for cache hits and blocked turns)
+    if store is not None and not final_state.get("cache_hit") and not final_state.get("input_blocked"):
+        all_messages: list[BaseMessage] = final_state.get("messages") or []
+        recent_turns = _short_term_svc._extract(all_messages, limit=5).turn_pairs
+        market_tickers = _extract_market_tickers(final_state)
+
+        svc = LongTermMemoryService(store)
+        try:
+            from app.modules.chat_history.long_term.schemas import UserProfile
+            current_profile_dict = final_state.get("user_profile") or {}
+            current_profile = UserProfile(
+                tracked_companies=current_profile_dict.get("tracked_companies", []),
+                research_interests=current_profile_dict.get("research_interests", []),
+                preferences=current_profile_dict.get("preferences", {}),
+                explicit_memories=current_profile_dict.get("explicit_memories", []),
+            )
+            # Fire-and-forget in background task
+            asyncio.create_task(
+                svc.persist_from_turn(
+                    user_id=str(user_id),
+                    user_query=user_query,
+                    draft_answer=draft,
+                    recent_turns=recent_turns,
+                    current_profile=current_profile,
+                    market_tickers=market_tickers,
                 )
-            except Exception as exc:
-                logger.warning("store.aput for %s failed: %s", ticker, exc)
+            )
+        except Exception as exc:
+            logger.warning("long_term memory persist failed: %s", exc)
 
     # 5. Touch chat updated_at
     await touch_chat(session, chat_id)

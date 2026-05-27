@@ -1,20 +1,22 @@
 """ReAct orchestrator node with closure-accumulator tool wiring."""
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.prebuilt import create_react_agent
 
-from app.core.prompts import SYSTEM_BUFFETT
+from app.core.prompts import ORCHESTRATOR_SYNTH_PROMPT
 from app.modules.agents.state import ZimShireState
 from app.modules.agents.tools.subagents import build_tools_with_accumulator
+from app.modules.chat_history.short_term.service import ShortTermMemoryService
 from app.services.llm import get_orchestrator_model
 
 logger = logging.getLogger(__name__)
+
+_short_term_svc = ShortTermMemoryService()
 
 
 def _build_system_prompt(state: ZimShireState) -> str:
@@ -22,11 +24,10 @@ def _build_system_prompt(state: ZimShireState) -> str:
     companies = ", ".join(profile.get("tracked_companies", [])) or "(none)"
     interests = ", ".join(profile.get("research_interests", [])) or "(none)"
 
-    history_lines: list[str] = []
-    for m in state.get("messages", [])[-20:]:
-        role = "User" if getattr(m, "type", None) == "human" else "Assistant"
-        content = m.content if isinstance(m.content, str) else str(m.content)
-        history_lines.append(f"{role}: {content}")
+    # Only last 5 turn-pairs — no full history duplication
+    history_text = _short_term_svc.format_recent_turns(
+        state.get("messages", []), limit_turn_pairs=5
+    )
 
     feedback = state.get("feedback_message")
     feedback_section = (
@@ -34,12 +35,12 @@ def _build_system_prompt(state: ZimShireState) -> str:
     )
 
     return (
-        f"{SYSTEM_BUFFETT}\n\n"
+        f"{ORCHESTRATOR_SYNTH_PROMPT}\n\n"
         f"## User profile (long-term)\n"
         f"- Tracked companies: {companies}\n"
         f"- Research interests: {interests}\n\n"
-        f"## Recent conversation\n"
-        + "\n".join(history_lines)
+        f"## Recent conversation (last 5 turns)\n"
+        + history_text
         + feedback_section
     )
 
@@ -53,13 +54,23 @@ async def orchestrator(state: ZimShireState, config: RunnableConfig) -> dict:
     }
 
     tools = build_tools_with_accumulator(accumulated)
-    # Per-chat model override applies to orchestrator; subagents use their own model
     model_override = config.get("configurable", {}).get("model")
     llm = get_orchestrator_model(model_override)
 
     agent = create_react_agent(llm, tools)
     system_prompt = _build_system_prompt(state)
-    inputs = {"messages": [SystemMessage(content=system_prompt), *state.get("messages", [])]}
+
+    # Pass only the current user message to avoid double-history with system prompt
+    current_messages = state.get("messages", [])
+    last_human: HumanMessage | None = None
+    for msg in reversed(current_messages):
+        if isinstance(msg, HumanMessage):
+            last_human = msg
+            break
+    input_messages = [SystemMessage(content=system_prompt)]
+    if last_human is not None:
+        input_messages.append(last_human)
+    inputs = {"messages": input_messages}
 
     try:
         result = await agent.ainvoke(inputs)
