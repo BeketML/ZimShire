@@ -1,4 +1,19 @@
-"""Compile the ZimShire LangGraph (with output_guardrail retry loop)."""
+"""Compile the ZimShire LangGraph.
+
+Topology (Etap C — selective subagents):
+  START → input_guardrail
+  input_guardrail →[blocked]→ END
+  input_guardrail →[continue]→ semantic_cache_check
+  semantic_cache_check →[hit]→ END
+  semantic_cache_check →[miss]→ load_memory
+  load_memory → orchestrator (planner)
+  orchestrator → run_subagents
+  run_subagents → synthesizer
+  synthesizer → output_guardrail
+  output_guardrail →[retry]→ synthesizer
+  output_guardrail →[proceed]→ faithfulness_guardrail
+  faithfulness_guardrail → END
+"""
 from __future__ import annotations
 
 from functools import partial
@@ -15,6 +30,8 @@ from app.modules.agents.nodes.guardrails import (
 )
 from app.modules.agents.nodes.memory import load_memory
 from app.modules.agents.nodes.orchestrator import orchestrator
+from app.modules.agents.nodes.subagent_runner import run_subagents
+from app.modules.agents.nodes.synthesizer import synthesizer
 from app.modules.agents.routing import (
     route_after_cache,
     route_after_input,
@@ -30,6 +47,8 @@ def build_graph(checkpointer: BaseCheckpointSaver, store: BaseStore):
     builder.add_node("semantic_cache_check", semantic_cache_check)
     builder.add_node("load_memory", partial(load_memory, store=store))
     builder.add_node("orchestrator", orchestrator)
+    builder.add_node("run_subagents", run_subagents)
+    builder.add_node("synthesizer", synthesizer)
     builder.add_node("output_guardrail", output_guardrail)
     builder.add_node("faithfulness_guardrail", faithfulness_guardrail)
 
@@ -45,11 +64,14 @@ def build_graph(checkpointer: BaseCheckpointSaver, store: BaseStore):
         {"hit": END, "miss": "load_memory"},
     )
     builder.add_edge("load_memory", "orchestrator")
-    builder.add_edge("orchestrator", "output_guardrail")
+    builder.add_edge("orchestrator", "run_subagents")
+    builder.add_edge("run_subagents", "synthesizer")
+    builder.add_edge("synthesizer", "output_guardrail")
     builder.add_conditional_edges(
         "output_guardrail",
         route_after_output_guardrail,
-        {"retry": "orchestrator", "proceed": "faithfulness_guardrail"},
+        # On retry: go back to synthesizer only (not re-run subagents)
+        {"retry": "synthesizer", "proceed": "faithfulness_guardrail"},
     )
     builder.add_edge("faithfulness_guardrail", END)
 

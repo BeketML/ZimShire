@@ -33,6 +33,11 @@ class ZimShireState(TypedDict):
     feedback_message: NotRequired[str | None]
     retry_count: NotRequired[int]
 
+    # Orchestrator planner output (Etap C)
+    subagent_plan: NotRequired[dict]            # serialised OrchestratorPlan
+    subagent_results: NotRequired[list[dict]]   # serialised SubagentResult[]
+    direct_answer_possible: NotRequired[bool]
+
     # Guardrail / cache flags
     cache_hit: NotRequired[bool]
     input_blocked: NotRequired[bool]
