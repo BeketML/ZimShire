@@ -6,7 +6,7 @@ https://qdrant.tech/documentation/tutorials-basics/search-beginners/
 https://qdrant.tech/documentation/tutorials-basics/cloud-inference-hybrid-search/
 https://qdrant.tech/documentation/tutorials-basics/reranking-hybrid-search/
 
-langgraph docs:
+langgraph docs about long term and short term memory:
 https://docs.langchain.com/oss/python/langgraph/quickstart
 https://docs.langchain.com/oss/python/langgraph/persistence
 https://docs.langchain.com/oss/python/concepts/memory

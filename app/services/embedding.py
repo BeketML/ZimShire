@@ -1,4 +1,4 @@
-"""Async embeddings via LiteLLM gateway (used for semantic cache lookups)."""
+"""Async text embeddings via LiteLLM gateway (text-embedding-3-small)."""
 from __future__ import annotations
 
 import httpx
