@@ -8,14 +8,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_db
 from app.core.exceptions import NotFoundError
 from app.modules.users import service
-from app.modules.users.schemas import UserResponse
+from app.modules.users.schemas import UserCreate, UserResponse
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def create_user(db: AsyncSession = Depends(get_db)) -> UserResponse:
-    user = await service.create_user(db)
+async def create_user(
+    body: UserCreate = UserCreate(),
+    db: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    user = await service.create_user(db, name=body.name, surname=body.surname)
     return UserResponse.model_validate(user)
 
 

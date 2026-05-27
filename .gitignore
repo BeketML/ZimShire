@@ -58,7 +58,7 @@ pyrightconfig.json
 *.pt
 *.pth
 data/cache/
-models/
+/models/
 
 # ── Alembic compiled ─────────────────────────────────────────────────────────
 alembic/versions/*.pyc

@@ -8,8 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import User
 
 
-async def create_user(session: AsyncSession) -> User:
-    user = User()
+async def create_user(
+    session: AsyncSession, *, name: str | None = None, surname: str | None = None
+) -> User:
+    user = User(name=name, surname=surname)
     session.add(user)
     await session.flush()
     await session.refresh(user)

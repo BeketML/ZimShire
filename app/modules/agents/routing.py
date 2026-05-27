@@ -12,6 +12,6 @@ def route_after_cache(state: ZimShireState) -> str:
 
 
 def route_after_output_guardrail(state: ZimShireState) -> str:
-    if state.get("output_blocked") and state.get("retry_count", 0) < 2:
+    if state.get("output_blocked") and state.get("retry_count", 0) < 3:
         return "retry"
     return "proceed"

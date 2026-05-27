@@ -19,6 +19,7 @@ qdrant-client
 fastembed
 yfinance
 langfuse
+python-json-logger
 duckduckgo-search
 tiktoken
 beautifulsoup4

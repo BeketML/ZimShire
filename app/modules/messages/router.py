@@ -39,10 +39,16 @@ router = APIRouter(prefix="/chats", tags=["messages"])
 
 
 @router.get("/{chat_id}/messages", response_model=HistoryResponse)
-async def list_messages(chat_id: UUID, db: AsyncSession = Depends(get_db)) -> HistoryResponse:
+async def list_messages(
+    chat_id: UUID,
+    user_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> HistoryResponse:
     chat = await get_chat(db, chat_id)
     if chat is None:
         raise HTTPException(status_code=404, detail="chat not found")
+    if chat.user_id != user_id:
+        raise HTTPException(status_code=403, detail="chat does not belong to user")
 
     rows = await msg_repo.list_messages(db, chat_id)
     items: list[MessageItem] = []
@@ -86,22 +92,12 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event, default=str)}\n\n"
 
 
-async def _stream_turn(chat_id: UUID, body: MessageCreate):
+async def _stream_turn(chat_id: UUID, user_id: UUID, body: MessageCreate):
     async with AsyncSessionLocal() as session:
-        chat = await get_chat(session, chat_id)
-        if chat is None:
-            yield _sse({"type": "error", "detail": "chat not found"})
-            yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": None})
-            return
-        if chat.user_id != body.user_id:
-            yield _sse({"type": "error", "detail": "chat does not belong to user"})
-            yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": None})
-            return
         human = await msg_repo.create_human_message(
             session, chat_id=chat_id, content=body.query
         )
         await session.commit()
-        chat_user_id = chat.user_id
         human_message_id = human.message_id
 
     handler = make_callback_handler()
@@ -111,7 +107,7 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
     config = {
         "configurable": {
             "thread_id": str(chat_id),
-            "user_id": str(chat_user_id),
+            "user_id": str(user_id),
             "chat_id": str(chat_id),
             "human_message_id": str(human_message_id),
             "query": body.query,
@@ -125,7 +121,7 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
 
     final_state: dict = {}
     try:
-        with trace_context(user_id=str(chat_user_id), session_id=str(chat_id)):
+        with trace_context(user_id=str(user_id), session_id=str(chat_id)):
             async for chunk in graph.astream(inputs, config=config, stream_mode="values"):
                 final_state = chunk
     except Exception as exc:
@@ -153,7 +149,7 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
         assistant_msg = await persist_assistant_turn(
             session,
             chat_id=chat_id,
-            user_id=chat_user_id,
+            user_id=user_id,
             user_query=body.query,
             final_state=final_state,
             langfuse_trace_id=trace_id,
@@ -175,14 +171,18 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
 
 
 @router.post("/{chat_id}/messages")
-async def post_message(chat_id: UUID, body: MessageCreate):
-    if body.chat_id != chat_id:
-        raise HTTPException(
-            status_code=422,
-            detail="chat_id in body must match chat_id in path",
-        )
+async def post_message(
+    chat_id: UUID,
+    body: MessageCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    chat = await get_chat(db, chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="chat not found")
+    if chat.user_id != body.user_id:
+        raise HTTPException(status_code=403, detail="chat does not belong to user")
     return StreamingResponse(
-        _stream_turn(chat_id, body),
+        _stream_turn(chat_id, body.user_id, body),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

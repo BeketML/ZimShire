@@ -1,12 +1,27 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Response
+from pythonjsonlogger import jsonlogger
 from sqlalchemy import text
 
 from app.core.config import settings
+
+
+def _configure_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        jsonlogger.JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    )
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+
+
+_configure_logging()
 from app.core.database import engine
 from app.modules.agents.mcp_client import close_mcp_client, init_mcp_client
 from app.modules.agents.service import close_graph, init_graph

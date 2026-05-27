@@ -8,6 +8,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool, StructuredTool
 
 from app.modules.cache.gateways import lookup_market, store_market
+from app.services.langfuse_service import observe_tool_call
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,26 @@ def _wrap_market_tool(tool: BaseTool, data_type: str) -> BaseTool:
     return tool
 
 
+def _wrap_traced_tool(tool: BaseTool) -> BaseTool:
+    """Emit a Langfuse event for each MCP tool invocation."""
+    tool_name = tool.name
+
+    async def _traced_invoke(**kwargs: Any) -> Any:
+        result = await tool.ainvoke(kwargs)
+        observe_tool_call(tool_name, kwargs, result)
+        return result
+
+    if isinstance(tool, StructuredTool):
+        return StructuredTool(
+            name=tool.name,
+            description=tool.description or "",
+            args_schema=tool.args_schema,
+            coroutine=_traced_invoke,
+            metadata=getattr(tool, "metadata", None),
+        )
+    return tool
+
+
 def get_agent_tools(
     agent: AgentName,
     *,
@@ -161,7 +182,7 @@ def get_agent_tools(
     if not matched:
         logger.warning("No MCP tools matched agent=%s data_type=%s", agent, data_type)
 
-    return matched
+    return [_wrap_traced_tool(t) for t in matched]
 
 
 def format_tool_names_for_prompt(tools: list[BaseTool]) -> str:

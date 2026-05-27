@@ -7,7 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class MessageCreate(BaseModel):
     user_id: UUID
-    chat_id: UUID
     query: str = Field(min_length=1, max_length=2000)
 
 

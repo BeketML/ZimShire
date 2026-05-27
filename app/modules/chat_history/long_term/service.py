@@ -31,23 +31,40 @@ class LongTermMemoryService:
                 if interest and interest not in profile.research_interests:
                     profile.research_interests.append(interest)
 
-            # Load preferences from profile meta
+            # Load preferences and identity from profile meta
             meta_ns = ("users", user_id, "profile")
             meta_items = await self._store.asearch(meta_ns, query="preferences", limit=1)
             for it in meta_items:
                 val = it.value or {}
                 profile.preferences = val.get("preferences") or {}
                 profile.explicit_memories = val.get("explicit_memories") or []
+                if val.get("name"):
+                    profile.name = val["name"]
+                if val.get("surname"):
+                    profile.surname = val["surname"]
         except Exception as exc:
             logger.warning("load_profile failed for user %s: %s", user_id, exc)
         return profile
 
-    async def init_user(self, user_id: str) -> None:
+    async def init_user(
+        self,
+        user_id: str,
+        *,
+        name: str | None = None,
+        surname: str | None = None,
+    ) -> None:
         try:
             await self._store.aput(
                 ("users", user_id, "profile"),
                 key="meta",
-                value={"preferences": {}, "explicit_memories": [], "topics": [], "updated_at": datetime.now(timezone.utc).isoformat()},
+                value={
+                    "name": name,
+                    "surname": surname,
+                    "preferences": {},
+                    "explicit_memories": [],
+                    "topics": [],
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
             )
         except Exception as exc:
             logger.warning("init_user failed for %s: %s", user_id, exc)

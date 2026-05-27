@@ -1,6 +1,6 @@
 """Compile the ZimShire LangGraph.
 
-Topology (Etap C — selective subagents):
+Topology:
   START → input_guardrail
   input_guardrail →[blocked]→ END
   input_guardrail →[continue]→ semantic_cache_check
@@ -10,7 +10,7 @@ Topology (Etap C — selective subagents):
   orchestrator → run_subagents
   run_subagents → synthesizer
   synthesizer → output_guardrail
-  output_guardrail →[retry]→ synthesizer
+  output_guardrail →[retry, retry_count < 3]→ synthesizer
   output_guardrail →[proceed]→ faithfulness_guardrail
   faithfulness_guardrail → END
 """
@@ -32,6 +32,7 @@ from app.modules.agents.nodes.memory import load_memory
 from app.modules.agents.nodes.orchestrator import orchestrator
 from app.modules.agents.nodes.subagent_runner import run_subagents
 from app.modules.agents.nodes.synthesizer import synthesizer
+from app.modules.agents.observability import wrap_node
 from app.modules.agents.routing import (
     route_after_cache,
     route_after_input,
@@ -43,14 +44,14 @@ from app.modules.agents.state import ZimShireState
 def build_graph(checkpointer: BaseCheckpointSaver, store: BaseStore):
     builder = StateGraph(ZimShireState)
 
-    builder.add_node("input_guardrail", input_guardrail)
-    builder.add_node("semantic_cache_check", semantic_cache_check)
-    builder.add_node("load_memory", partial(load_memory, store=store))
-    builder.add_node("orchestrator", orchestrator)
-    builder.add_node("run_subagents", run_subagents)
-    builder.add_node("synthesizer", synthesizer)
-    builder.add_node("output_guardrail", output_guardrail)
-    builder.add_node("faithfulness_guardrail", faithfulness_guardrail)
+    builder.add_node("input_guardrail", wrap_node(input_guardrail, "input_guardrail"))
+    builder.add_node("semantic_cache_check", wrap_node(semantic_cache_check, "semantic_cache_check"))
+    builder.add_node("load_memory", wrap_node(partial(load_memory, store=store), "load_memory"))
+    builder.add_node("orchestrator", wrap_node(orchestrator, "orchestrator"))
+    builder.add_node("run_subagents", wrap_node(run_subagents, "run_subagents"))
+    builder.add_node("synthesizer", wrap_node(synthesizer, "synthesizer"))
+    builder.add_node("output_guardrail", wrap_node(output_guardrail, "output_guardrail"))
+    builder.add_node("faithfulness_guardrail", wrap_node(faithfulness_guardrail, "faithfulness_guardrail"))
 
     builder.add_edge(START, "input_guardrail")
     builder.add_conditional_edges(
@@ -70,7 +71,6 @@ def build_graph(checkpointer: BaseCheckpointSaver, store: BaseStore):
     builder.add_conditional_edges(
         "output_guardrail",
         route_after_output_guardrail,
-        # On retry: go back to synthesizer only (not re-run subagents)
         {"retry": "synthesizer", "proceed": "faithfulness_guardrail"},
     )
     builder.add_edge("faithfulness_guardrail", END)

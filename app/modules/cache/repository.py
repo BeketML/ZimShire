@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import bindparam, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import MarketDataCache, SemanticCache
@@ -39,11 +40,15 @@ async def upsert_market(
     ttl: timedelta = MARKET_DEFAULT_TTL,
 ) -> None:
     expires = datetime.now(timezone.utc) + ttl
-    session.add(
-        MarketDataCache(
-            ticker=ticker, data_type=data_type, payload=payload, expires_at=expires
+    stmt = (
+        pg_insert(MarketDataCache)
+        .values(ticker=ticker, data_type=data_type, payload=payload, expires_at=expires)
+        .on_conflict_do_update(
+            constraint="uq_market_cache_ticker_type",
+            set_={"payload": payload, "expires_at": expires},
         )
     )
+    await session.execute(stmt)
     await session.flush()
 
 
