@@ -19,6 +19,7 @@ def _configure_logging() -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(logging.INFO)
+    logging.getLogger("app.modules.agents.mcp_registry").setLevel(logging.DEBUG)
 
 
 _configure_logging()

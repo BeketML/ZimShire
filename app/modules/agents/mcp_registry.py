@@ -125,9 +125,26 @@ def _wrap_market_tool(tool: BaseTool, data_type: str) -> BaseTool:
             if cached is not None:
                 return cached
         result = await tool.ainvoke(kwargs)
-        if isinstance(ticker, str) and ticker and isinstance(result, dict) and result:
+        # MCP tools may return: str (JSON), dict, or list of content blocks [{type,text}]
+        parsed = result
+        if isinstance(result, str):
             try:
-                await store_market(ticker, data_type, result)
+                parsed = json.loads(result)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        elif isinstance(result, list):
+            # Extract text from first text-block and try JSON parse
+            for block in result:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    try:
+                        parsed = json.loads(block["text"])
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                    break
+        if isinstance(ticker, str) and ticker and isinstance(parsed, dict) and parsed:
+            try:
+                await store_market(ticker, data_type, parsed)
+                logger.info("store_market(%s, %s) OK", ticker, data_type)
             except Exception as exc:
                 logger.warning("store_market(%s) failed: %s", ticker, exc)
         return result
