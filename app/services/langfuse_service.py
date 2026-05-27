@@ -1,66 +1,107 @@
-"""Langfuse observability — one trace per user request."""
+"""Langfuse v4 observability — one trace per user request.
+
+Usage:
+    handler = make_callback_handler()
+    with trace_context(user_id=..., session_id=..., name=...):
+        result = await agent.ainvoke(..., config={"callbacks": [handler]})
+    trace_id = handler.last_trace_id or f"local-{uuid4()}"
+    flush()
+"""
 from __future__ import annotations
 
 import logging
-
-from app.core.config import settings
+import uuid
 
 logger = logging.getLogger(__name__)
 
-_langfuse = None
+_LANGFUSE_AVAILABLE: bool | None = None
 
 
-def _get_langfuse():
-    global _langfuse
-    if _langfuse is None and settings.langfuse_public_key:
+def _check_available() -> bool:
+    global _LANGFUSE_AVAILABLE
+    if _LANGFUSE_AVAILABLE is None:
         try:
-            from langfuse import Langfuse
-
-            _langfuse = Langfuse(
-                public_key=settings.langfuse_public_key,
-                secret_key=settings.langfuse_secret_key,
-                host=settings.langfuse_base_url or "https://cloud.langfuse.com",
-            )
-        except Exception as exc:
-            logger.warning("Langfuse init failed: %s", exc)
-    return _langfuse
+            import os
+            from langfuse import get_client  # noqa: F401
+            pk = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+            sk = os.environ.get("LANGFUSE_SECRET_KEY", "")
+            _LANGFUSE_AVAILABLE = bool(pk and sk)
+        except Exception:
+            _LANGFUSE_AVAILABLE = False
+    return _LANGFUSE_AVAILABLE
 
 
+def make_callback_handler():
+    """Return a LangChain CallbackHandler for the current request.
+
+    Returns None if Langfuse is not configured — callers must handle None.
+    """
+    if not _check_available():
+        return None
+    try:
+        from langfuse.langchain import CallbackHandler
+        return CallbackHandler()
+    except Exception as exc:
+        logger.warning("Langfuse CallbackHandler creation failed: %s", exc)
+        return None
+
+
+def trace_context(*, user_id: str, session_id: str, name: str = "zimshire_turn"):
+    """Context manager that attaches trace metadata to all LLM calls within it.
+
+    Use as:
+        with trace_context(user_id=..., session_id=...):
+            await agent.ainvoke(...)
+    """
+    if not _check_available():
+        from contextlib import nullcontext
+        return nullcontext()
+    try:
+        from langfuse import propagate_attributes
+        return propagate_attributes(
+            trace_name=name,
+            session_id=session_id,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        logger.warning("Langfuse propagate_attributes failed: %s", exc)
+        from contextlib import nullcontext
+        return nullcontext()
+
+
+def get_trace_id(handler) -> str:
+    """Extract trace_id from handler after a run, or return a local fallback UUID."""
+    if handler is not None:
+        try:
+            tid = handler.last_trace_id
+            if tid:
+                return tid
+        except Exception:
+            pass
+    return f"local-{uuid.uuid4()}"
+
+
+def flush() -> None:
+    """Flush pending Langfuse events. Call after each SSE turn completes."""
+    if not _check_available():
+        return
+    try:
+        from langfuse import get_client
+        get_client().flush()
+    except Exception as exc:
+        logger.warning("Langfuse flush failed: %s", exc)
+
+
+# Keep for backward compat (called by guardrail nodes)
 def new_trace(
     *,
     user_id: str | None = None,
     session_id: str | None = None,
     name: str = "zimshire_turn",
 ) -> tuple[str, object | None]:
-    """Create a Langfuse trace and return (trace_id, handler).
+    """Legacy helper — returns (placeholder_id, handler).
 
-    Returns a UUID-based local trace_id if Langfuse is not configured.
-    The handler (langfuse.langchain.CallbackHandler) can be passed to
-    LangChain runnables via config["callbacks"].
+    The real trace_id is only known after the run; use get_trace_id(handler).
     """
-    lf = _get_langfuse()
-    if lf is None:
-        import uuid
-
-        return f"local-{uuid.uuid4()}", None
-
-    try:
-        from langfuse.langchain import CallbackHandler
-
-        trace = lf.trace(name=name, user_id=user_id, session_id=session_id)
-        handler = CallbackHandler(trace_id=trace.id, langfuse_client=lf)
-        return trace.id, handler
-    except Exception as exc:
-        logger.warning("Langfuse trace creation failed: %s", exc)
-        import uuid
-
-        return f"local-{uuid.uuid4()}", None
-
-
-def flush() -> None:
-    lf = _get_langfuse()
-    if lf is not None:
-        try:
-            lf.flush()
-        except Exception:
-            pass
+    handler = make_callback_handler()
+    return f"local-{uuid.uuid4()}", handler

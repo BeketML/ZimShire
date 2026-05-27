@@ -9,6 +9,7 @@ psycopg[binary,pool]
 httpx
 langgraph
 langgraph-checkpoint-postgres
+langchain
 langchain-core
 langchain-openai
 langchain-mcp-adapters

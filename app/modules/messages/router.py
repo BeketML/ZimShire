@@ -23,7 +23,12 @@ from app.modules.messages.schemas import (
 from app.modules.messages.service import persist_assistant_turn
 from app.modules.rag_retrievals.repository import list_for_message
 from app.modules.agents.service import get_graph, get_store
-from app.services.langfuse_service import new_trace
+from app.services.langfuse_service import (
+    flush as langfuse_flush,
+    get_trace_id,
+    make_callback_handler,
+    trace_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,9 +102,9 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
         chat_user_id = chat.user_id
         human_message_id = human.message_id
 
-    trace_id, _handler = new_trace(user_id=str(chat_user_id), session_id=str(chat_id))
+    handler = make_callback_handler()
 
-    # Stage 4-9 — run graph to completion
+    # Stage 4-9 — run graph to completion inside Langfuse trace context
     graph = get_graph()
     store = get_store()
     config = {
@@ -109,25 +114,33 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
             "chat_id": str(chat_id),
             "model": chat_model,
             "human_message_id": str(human_message_id),
-        }
+        },
+        "callbacks": [handler] if handler is not None else [],
     }
     inputs = {"messages": [HumanMessage(content=body.content)]}
 
     final_state: dict = {}
     try:
-        async for chunk in graph.astream(inputs, config=config, stream_mode="values"):
-            final_state = chunk
+        with trace_context(user_id=str(chat_user_id), session_id=str(chat_id)):
+            async for chunk in graph.astream(inputs, config=config, stream_mode="values"):
+                final_state = chunk
     except Exception as exc:
         logger.exception("graph run failed: %s", exc)
+        trace_id = get_trace_id(handler)
         yield _sse({"type": "error", "detail": str(exc)})
         yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": trace_id})
+        langfuse_flush()
         return
+
+    # Resolve trace_id now that the run is complete
+    trace_id = get_trace_id(handler)
 
     # Handle input_blocked
     if final_state.get("input_blocked"):
         reason = final_state.get("input_blocked_reason") or "Query rejected by input guardrail."
         yield _sse({"type": "blocked", "reason": reason})
         yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": trace_id})
+        langfuse_flush()
         return
 
     # Stage 9.5 — stream approved draft_answer as token events
@@ -158,6 +171,7 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
             "cache_hit": bool(final_state.get("cache_hit")),
         }
     )
+    langfuse_flush()
 
 
 @router.post("/{chat_id}/messages")
