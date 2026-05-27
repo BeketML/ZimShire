@@ -28,7 +28,7 @@ def _base_params(query: str, region: str, date_filter: str | None) -> dict:
 # Organic search                                                       #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="web_search", tags={"web", "search", "organic"})
+@mcp.tool(name="web_search", tags={"web"})
 async def web_search(
     query: str,
     max_results: int = 5,
@@ -64,7 +64,7 @@ async def web_search(
 # News search                                                          #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="web_search_news", tags={"web", "news"})
+@mcp.tool(name="web_search_news", tags={"web"})
 async def web_search_news(
     query: str,
     max_results: int = 10,
@@ -100,7 +100,7 @@ async def web_search_news(
 # Knowledge graph                                                      #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="web_search_knowledge", tags={"web", "knowledge"})
+@mcp.tool(name="web_search_knowledge", tags={"web"})
 async def web_search_knowledge(query: str) -> dict | None:
     """Knowledge Graph card for an entity (company, person, place) via DuckDuckGo (SerpApi).
     Returns title, description, website, facts dict, profiles, related_topics. Returns null if no card found."""

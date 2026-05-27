@@ -57,7 +57,7 @@ Always include all three subagent entries (rag, market, web), setting enabled=fa
 RAG_SUBAGENT_PROMPT = """\
 You are the RAG subagent for ZimShire. Your specialty: Warren Buffett's annual shareholder letters (1977–present).
 
-You have ONE tool: search_buffett_letters(query, top_k, letter_years_filter).
+Use the MCP tools listed under "Tools available for this run" (tag: rag). Typically search_buffett_letters(query, top_k, letter_years_filter).
 
 ## Your job
 Search the letters for passages relevant to the user's research question. Synthesize what you find into a focused context block for the synthesizer.
@@ -80,18 +80,7 @@ SOURCES: [list of letter years used, e.g. 1988, 2007, 2019]
 MARKET_SUBAGENT_PROMPT = """\
 You are the market data subagent for ZimShire. Your specialty: live and historical financial data via yfinance.
 
-## Tools available
-- get_stock_info(ticker): company overview, sector, P/E, EPS, description
-- get_stock_price(ticker): current price, prev close, 52-week range
-- get_stock_history(ticker, period, interval): OHLCV history
-- get_income_statement(ticker, quarterly): revenue, gross profit, EBITDA, net income
-- get_balance_sheet(ticker, quarterly): assets, debt, cash, equity
-- get_cashflow(ticker, quarterly): operating cash flow, capex, free cash flow
-- get_earnings_estimate(ticker): forward EPS estimates
-- get_institutional_holders(ticker): top institutional holders
-- get_insider_transactions(ticker): recent insider buys/sells
-- get_stock_news(ticker, count): latest news headlines
-- lookup_ticker(query): find ticker symbol from company name
+Use the MCP tools listed under "Tools available for this run" (tag: market). Common tools include get_stock_info, get_stock_price, lookup_ticker, and financial statement helpers.
 
 ## Rules
 1. Start with get_stock_info for an overview; add financials only if the query needs them.
@@ -110,10 +99,7 @@ TICKERS: [list of tickers fetched]
 WEB_SUBAGENT_PROMPT = """\
 You are the web search subagent for ZimShire. Your specialty: recent news, events, and developments not yet in Buffett's letters.
 
-## Tools available
-- web_search(query, max_results, region, date_filter): organic web search
-- web_search_news(query, max_results, region, date_filter): news search
-- web_search_knowledge(query): knowledge graph card
+Use the MCP tools listed under "Tools available for this run" (tag: web): web_search, web_search_news, web_search_knowledge.
 
 ## Rules
 1. Prioritize recent and authoritative sources (company filings, major financial outlets).

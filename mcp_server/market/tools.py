@@ -67,7 +67,7 @@ async def get_stock_price(ticker: str) -> dict:
 # Price history                                                        #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="get_stock_history", tags={"market", "finance", "price"})
+@mcp.tool(name="get_stock_history", tags={"market"})
 async def get_stock_history(
     ticker: str,
     period: str = "1mo",
@@ -85,7 +85,7 @@ async def get_stock_history(
 # Financials                                                           #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="get_income_statement", tags={"market", "finance", "financials"})
+@mcp.tool(name="get_income_statement", tags={"market"})
 async def get_income_statement(ticker: str, quarterly: bool = False) -> dict:
     """Income statement (P&L): revenue, gross profit, EBITDA, net income.
     quarterly=True for last 4 quarters; False for annual (default)."""
@@ -95,7 +95,7 @@ async def get_income_statement(ticker: str, quarterly: bool = False) -> dict:
     return await _run(_fetch)
 
 
-@mcp.tool(name="get_balance_sheet", tags={"market", "finance", "financials"})
+@mcp.tool(name="get_balance_sheet", tags={"market"})
 async def get_balance_sheet(ticker: str, quarterly: bool = False) -> dict:
     """Balance sheet: total assets, total debt, cash, stockholders equity.
     quarterly=True for last 4 quarters; False for annual (default)."""
@@ -105,7 +105,7 @@ async def get_balance_sheet(ticker: str, quarterly: bool = False) -> dict:
     return await _run(_fetch)
 
 
-@mcp.tool(name="get_cashflow", tags={"market", "finance", "financials"})
+@mcp.tool(name="get_cashflow", tags={"market"})
 async def get_cashflow(ticker: str, quarterly: bool = False) -> dict:
     """Cash flow statement: operating cash flow, capital expenditures, free cash flow.
     quarterly=True for last 4 quarters; False for annual (default)."""
@@ -119,7 +119,7 @@ async def get_cashflow(ticker: str, quarterly: bool = False) -> dict:
 # Analysis                                                             #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="get_earnings_estimate", tags={"market", "finance", "analysis"})
+@mcp.tool(name="get_earnings_estimate", tags={"market"})
 async def get_earnings_estimate(ticker: str) -> dict:
     """Forward EPS estimates: current quarter (0q), next quarter (+1q), current year (0y), next year (+1y).
     Includes number of analysts, average, low, high, year-ago EPS, growth."""
@@ -132,7 +132,7 @@ async def get_earnings_estimate(ticker: str) -> dict:
 # Holders                                                              #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="get_institutional_holders", tags={"market", "finance", "holders"})
+@mcp.tool(name="get_institutional_holders", tags={"market"})
 async def get_institutional_holders(ticker: str) -> list[dict]:
     """Top institutional holders: fund name, shares held, % of float, value, date reported."""
     return await _run(
@@ -140,7 +140,7 @@ async def get_institutional_holders(ticker: str) -> list[dict]:
     )
 
 
-@mcp.tool(name="get_insider_transactions", tags={"market", "finance", "holders"})
+@mcp.tool(name="get_insider_transactions", tags={"market"})
 async def get_insider_transactions(ticker: str) -> list[dict]:
     """Recent insider buy/sell transactions: name, title, date, shares, value, transaction type."""
     return await _run(
@@ -152,7 +152,7 @@ async def get_insider_transactions(ticker: str) -> list[dict]:
 # News                                                                 #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="get_stock_news", tags={"market", "news"})
+@mcp.tool(name="get_stock_news", tags={"market"})
 async def get_stock_news(ticker: str, count: int = 10) -> list[dict]:
     """Latest news articles for a specific ticker from Yahoo Finance."""
     return await _run(
@@ -164,7 +164,7 @@ async def get_stock_news(ticker: str, count: int = 10) -> list[dict]:
 # Screener / discovery                                                 #
 # ------------------------------------------------------------------ #
 
-@mcp.tool(name="lookup_ticker", tags={"market", "screener"})
+@mcp.tool(name="lookup_ticker", tags={"market"})
 async def lookup_ticker(query: str) -> list[dict]:
     """Look up ticker symbols by company name or keyword.
     Returns matched stocks, ETFs, mutual funds, indices, futures, currencies."""

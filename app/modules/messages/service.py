@@ -25,6 +25,17 @@ _short_term_svc = ShortTermMemoryService()
 
 
 def _extract_market_tickers(final_state: dict) -> list[str]:
+    for result in final_state.get("subagent_results") or []:
+        if result.get("agent_name") != "market":
+            continue
+        raw = result.get("raw_artifacts") or {}
+        market_data = raw.get("market_data") or {}
+        if isinstance(market_data, dict) and market_data:
+            return [k for k in market_data if not k.startswith("_")]
+        tickers = raw.get("tickers") or []
+        if tickers:
+            return list(tickers)
+
     market_text = (final_state.get("collected_context") or {}).get("market", "")
     if not market_text:
         return []

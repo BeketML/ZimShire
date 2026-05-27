@@ -514,18 +514,24 @@ async def orchestrator(state: ZimShireState, config: RunnableConfig) -> dict:
 
 ---
 
-### 5.5 Subagent Tools
+### 5.5 Subagent MCP Tools (tag-based)
 
-All three tools are built inside `build_tools_with_accumulator`. Each tool:
+Subagents are separate ReAct agents in `app/modules/agents/subagents/`. Each receives MCP tools filtered by FastMCP tags via `app/modules/agents/mcp_registry.py`:
 
-1. Calls MCP via `get_mcp_tools()` (SSE to port 8001)
-2. Writes raw results into `accumulated` via closure
-3. Writes formatted text into `accumulated["collected_context"][key]`
-4. Returns a formatted string to the orchestrator LLM
+| Subagent | Primary tag | Exclude |
+|---|---|---|
+| RAG | `rag` | `ui` |
+| Market | `market` | `ui` |
+| Web | `web` | `ui` |
 
-Implement in `app/graph/tools/subagents.py`.
+- Single MCP server (`mcp_server.main`, port 8001) — `init_mcp_client(base_url)` in lifespan.
+- `get_agent_tools(agent, data_type=...)` returns LangChain tools from `langchain_mcp_adapters` (no local `@tool` wrappers).
+- Market tools optionally wrapped with Postgres cache (`lookup_market` / `store_market`).
+- Artifacts (`rag_chunks`, `web_sources`, `market_data`) extracted from `ToolMessage` in `subagents/base.py` after `ainvoke`.
 
-#### `rag_agent`
+Legacy `build_tools_with_accumulator` in `tools/subagents.py` is removed; orchestrator is planner-only (structured output), subagents run in `run_subagents` node.
+
+#### `rag_agent` (historical reference — orchestrator tool pattern, deprecated)
 
 ```python
 @tool
@@ -1103,9 +1109,13 @@ app/
     state.py
     routing.py
     builder.py
-    mcp_client.py
-    tools/
-      subagents.py          # build_tools_with_accumulator
+    mcp_client.py           # single MultiServerMCPClient
+    mcp_registry.py         # get_agent_tools() by tag
+    subagents/
+      base.py               # run_react_subagent + artifact extraction
+      rag_subagent.py
+      market_subagent.py
+      web_subagent.py
     nodes/
       guardrails.py         # input_guardrail, output_guardrail, faithfulness_guardrail
       cache.py

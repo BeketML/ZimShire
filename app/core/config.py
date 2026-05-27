@@ -10,9 +10,6 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     mcp_base_url: str = "http://localhost:8001"
     mcp_port: int = 8001
-    mcp_rag_url: str = "http://localhost:8001"
-    mcp_market_url: str = "http://localhost:8002"
-    mcp_web_url: str = "http://localhost:8003"
     litellm_base_url: str = ""
     litellm_api_key: str = ""
     litellm_end_user_id: str = ""

@@ -17,11 +17,7 @@ from app.modules.messages.router import router as messages_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_mcp_client(
-        rag_url=settings.mcp_rag_url,
-        market_url=settings.mcp_market_url,
-        web_url=settings.mcp_web_url,
-    )
+    await init_mcp_client(base_url=settings.mcp_base_url)
     await init_graph()
     yield
     await close_graph()
@@ -54,10 +50,10 @@ async def _check_qdrant() -> str:
         return f"error: {exc}"
 
 
-async def _check_mcp_url(url: str) -> str:
+async def _check_mcp() -> str:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{url.rstrip('/')}/mcp")
+            resp = await client.get(f"{settings.mcp_base_url.rstrip('/')}/mcp")
             if resp.status_code >= 500:
                 return f"error: MCP returned {resp.status_code}"
         return "ok"
@@ -69,17 +65,13 @@ async def _check_mcp_url(url: str) -> str:
 async def health(response: Response) -> dict[str, str]:
     postgres = await _check_postgres()
     qdrant = await _check_qdrant()
-    mcp_rag = await _check_mcp_url(settings.mcp_rag_url)
-    mcp_market = await _check_mcp_url(settings.mcp_market_url)
-    mcp_web = await _check_mcp_url(settings.mcp_web_url)
-    all_ok = all(s == "ok" for s in (postgres, qdrant, mcp_rag, mcp_market, mcp_web))
+    mcp_status = await _check_mcp()
+    all_ok = all(s == "ok" for s in (postgres, qdrant, mcp_status))
     if not all_ok:
         response.status_code = 503
     return {
         "status": "ok" if all_ok else "degraded",
         "postgres": postgres,
         "qdrant": qdrant,
-        "mcp_rag": mcp_rag,
-        "mcp_market": mcp_market,
-        "mcp_web": mcp_web,
+        "mcp": mcp_status,
     }

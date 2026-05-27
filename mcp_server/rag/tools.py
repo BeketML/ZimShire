@@ -27,7 +27,7 @@ def _ensure_rag() -> None:
     _rag_ready = True
 
 
-@mcp.tool(name="search_buffett_letters", tags={"rag", "research", "buffett"})
+@mcp.tool(name="search_buffett_letters", tags={"rag"})
 def search_buffett_letters(
     query: str,
     top_k: int = 5,
