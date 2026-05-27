@@ -12,7 +12,7 @@ from langgraph.prebuilt import create_react_agent
 from app.core.prompts import SYSTEM_BUFFETT
 from app.modules.agents.state import ZimShireState
 from app.modules.agents.tools.subagents import build_tools_with_accumulator
-from app.services.llm import get_chat_model
+from app.services.llm import get_orchestrator_model
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,9 @@ async def orchestrator(state: ZimShireState, config: RunnableConfig) -> dict:
     }
 
     tools = build_tools_with_accumulator(accumulated)
-    model_name = config.get("configurable", {}).get("model")
-    llm = get_chat_model(model_name)
+    # Per-chat model override applies to orchestrator; subagents use their own model
+    model_override = config.get("configurable", {}).get("model")
+    llm = get_orchestrator_model(model_override)
 
     agent = create_react_agent(llm, tools)
     system_prompt = _build_system_prompt(state)

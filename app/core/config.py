@@ -13,7 +13,12 @@ class Settings(BaseSettings):
     litellm_base_url: str = ""
     litellm_api_key: str = ""
     litellm_end_user_id: str = ""
+    # Per-role model config (all via LiteLLM gateway)
     default_chat_model: str = "gpt-4o-mini"
+    orchestrator_model: str = "claude-sonnet-4-6"
+    subagent_model: str = "claude-sonnet-4-6"
+    guardrail_model: str = "gpt-4o-mini"
+    memory_model: str = "claude-haiku-4-5"
     embedding_model: str = "text-embedding-3-small"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

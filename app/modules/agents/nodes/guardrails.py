@@ -15,7 +15,7 @@ from langchain_core.runnables import RunnableConfig
 
 from app.modules.agents.state import ZimShireState
 from app.modules.guardrails.gateways import write_guardrail_log
-from app.services.llm import get_chat_model
+from app.services.llm import get_guardrail_model as get_chat_model
 
 logger = logging.getLogger(__name__)
 
