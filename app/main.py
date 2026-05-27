@@ -53,10 +53,10 @@ async def _check_qdrant() -> str:
 async def _check_mcp() -> str:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{settings.mcp_base_url.rstrip('/')}/health")
-            if resp.status_code == 404:
-                resp = await client.get(settings.mcp_base_url.rstrip("/"))
-            resp.raise_for_status()
+            # FastMCP streamable-http serves at /mcp; any sub-5xx response means up
+            resp = await client.get(f"{settings.mcp_base_url.rstrip('/')}/mcp")
+            if resp.status_code >= 500:
+                return f"error: MCP returned {resp.status_code}"
         return "ok"
     except Exception as exc:
         return f"error: {exc}"
