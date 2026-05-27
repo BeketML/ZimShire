@@ -51,17 +51,16 @@ services:
     networks:
       - zimshire
 
-  mcp:
+  mcp-rag:
     build: .
     image: zimshire:latest
-    container_name: zimshire-mcp
+    container_name: zimshire-mcp-rag
     restart: unless-stopped
-    command: ["python", "-m", "mcp_server.main", "--transport", "streamable-http", "--port", "8001"]
+    command: ["python", "-m", "mcp_server.rag_main", "--transport", "streamable-http", "--port", "8001"]
     ports:
-      - "${MCP_PORT:-8001}:8001"
+      - "${MCP_RAG_PORT:-8001}:8001"
     env_file: .env
     environment:
-      # Override host-side URL so the container resolves the qdrant service name
       QDRANT_URL: "http://qdrant:6333"
     depends_on:
       qdrant:
@@ -69,7 +68,6 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      # Just verify something is listening on 8001 (FastMCP has no /health endpoint)
       test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost', 8001)); s.close()\""]
       interval: 10s
       timeout: 5s
@@ -78,6 +76,42 @@ services:
       start_period: 180s
     volumes:
       - model_cache:/root/.cache
+    networks:
+      - zimshire
+
+  mcp-market:
+    build: .
+    image: zimshire:latest
+    container_name: zimshire-mcp-market
+    restart: unless-stopped
+    command: ["python", "-m", "mcp_server.market_main", "--transport", "streamable-http", "--port", "8002"]
+    ports:
+      - "${MCP_MARKET_PORT:-8002}:8002"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost', 8002)); s.close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - zimshire
+
+  mcp-web:
+    build: .
+    image: zimshire:latest
+    container_name: zimshire-mcp-web
+    restart: unless-stopped
+    command: ["python", "-m", "mcp_server.web_main", "--transport", "streamable-http", "--port", "8003"]
+    ports:
+      - "${MCP_WEB_PORT:-8003}:8003"
+    env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost', 8003)); s.close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     networks:
       - zimshire
 
@@ -95,11 +129,18 @@ services:
       # Override host-side URLs so containers resolve each other by service name
       DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
       QDRANT_URL: "http://qdrant:6333"
-      MCP_BASE_URL: "http://mcp:8001"
+      MCP_BASE_URL: "http://mcp-rag:8001"
+      MCP_RAG_URL: "http://mcp-rag:8001"
+      MCP_MARKET_URL: "http://mcp-market:8002"
+      MCP_WEB_URL: "http://mcp-web:8003"
     depends_on:
       postgres:
         condition: service_healthy
-      mcp:
+      mcp-rag:
+        condition: service_healthy
+      mcp-market:
+        condition: service_healthy
+      mcp-web:
         condition: service_healthy
     volumes:
       - model_cache:/root/.cache
