@@ -2,9 +2,9 @@
 
 ## Canonical API
 
-This document is the **single source of truth** for the public HTTP API (**7 endpoints**). There is no `/invoke`, `/chat_history`, or client-supplied `thread_id`. The client identifies sessions by `chat_id` only; LangGraph checkpointing uses `str(chat_id)` as `thread_id` internally.
+This document is the **single source of truth** for the public HTTP API (**9 endpoints**). There is no `/invoke` or client-supplied `thread_id`. The client identifies sessions by `chat_id` only; LangGraph checkpointing uses `str(chat_id)` as `thread_id` internally.
 
-ZimShire exposes 7 HTTP endpoints. All LLM orchestration, guardrails, and persistence happen server-side inside the LangGraph graph.
+ZimShire exposes 9 HTTP endpoints. All LLM orchestration, guardrails, and persistence happen server-side inside the LangGraph graph. Models are configured server-side via `app/core/config.py` — clients do not pass model overrides.
 
 **Base URL:** `http://localhost:8000`
 
@@ -22,7 +22,9 @@ ZimShire exposes 7 HTTP endpoints. All LLM orchestration, guardrails, and persis
 | 4 | `GET` | `/chats/{chat_id}` | Get chat metadata |
 | 5 | `GET` | `/chats/{chat_id}/messages` | Retrieve conversation history |
 | 6 | `POST` | `/chats/{chat_id}/messages` | Send a research query — SSE streaming response |
-| 7 | `GET` | `/health` | Health check (Postgres + Qdrant + MCP) |
+| 7 | `GET` | `/users/{user_id}/memory/long-term` | Inspect long-term user profile (store) |
+| 8 | `GET` | `/users/{user_id}/chats/{chat_id}/memory/short-term` | Inspect short-term checkpointer history |
+| 9 | `GET` | `/health` | Health check (Postgres + Qdrant + MCP) |
 
 ---
 
@@ -101,9 +103,7 @@ Content-Type: application/json
 ```json
 {
   "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "chat_title": "Apple moat analysis",
-  "model": "gpt-4o-mini",
-  "provider": "openai"
+  "chat_title": "Apple moat analysis"
 }
 ```
 
@@ -111,8 +111,8 @@ Content-Type: application/json
 |-------|------|----------|-------------|
 | `user_id` | `uuid` | yes | Must exist in `users` table |
 | `chat_title` | `string` | no | Human-readable label for the conversation |
-| `model` | `string` | no | LiteLLM model slug; defaults to `DEFAULT_CHAT_MODEL` from env |
-| `provider` | `string` | no | Provider name; defaults to `openai` |
+
+`model` and `provider` are set server-side from `DEFAULT_CHAT_MODEL` and `DEFAULT_PROVIDER` in config (returned in response).
 
 ### Response `201 Created`
 
@@ -270,15 +270,19 @@ Content-Type: application/json
 
 ```json
 {
-  "content": "How would Buffett evaluate Apple's economic moat based on his letters?",
-  "model": "gpt-4o"
+  "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "chat_id": "a1b2c3d4-0000-0000-0000-000000000001",
+  "query": "How would Buffett evaluate Apple's economic moat based on his letters?"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `content` | `string` | yes | The research question. Max 2000 characters. |
-| `model` | `string` | no | Override model for this turn only; must be in gateway whitelist |
+| `user_id` | `uuid` | yes | Must match the chat owner |
+| `chat_id` | `uuid` | yes | Must match path `{chat_id}` (LangGraph `thread_id`) |
+| `query` | `string` | yes | The research question. Max 2000 characters. |
+
+`message_id` for the human turn is generated server-side. LLM models are taken from server config only (no client `model` field).
 
 ### Response — SSE stream
 
@@ -403,6 +407,75 @@ async with httpx.AsyncClient(timeout=120) as client:
 
 ---
 
+## `GET /users/{user_id}/memory/long-term`
+
+Inspect long-term memory for a user (LangGraph `AsyncPostgresStore`).
+
+### Query parameters
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `query` | `string` | `""` | Optional search string for semantic store lookup |
+
+### Response `200 OK`
+
+```json
+{
+  "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "search_query": "moat",
+  "profile": {
+    "tracked_companies": ["AAPL"],
+    "research_interests": ["economic moat"],
+    "preferences": {},
+    "explicit_memories": []
+  }
+}
+```
+
+### Status codes
+
+| Code | Meaning |
+|------|---------|
+| `200` | Profile returned |
+| `404` | User not found |
+
+---
+
+## `GET /users/{user_id}/chats/{chat_id}/memory/short-term`
+
+Inspect short-term memory from the LangGraph checkpointer (`thread_id = str(chat_id)`).
+
+### Query parameters
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit_turn_pairs` | `int` | `5` | Max Human/Assistant pairs to return (1–20) |
+
+### Response `200 OK`
+
+```json
+{
+  "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "chat_id": "a1b2c3d4-0000-0000-0000-000000000001",
+  "thread_id": "a1b2c3d4-0000-0000-0000-000000000001",
+  "turn_pairs": [
+    {"human": "...", "assistant": "..."}
+  ],
+  "formatted": "User: ...\nAssistant: ...",
+  "message_count": 4
+}
+```
+
+### Status codes
+
+| Code | Meaning |
+|------|---------|
+| `200` | Memory returned (may be empty on new chat) |
+| `403` | Chat does not belong to user |
+| `404` | Chat not found |
+
+---
+
 ## `GET /health`
 
 Health check endpoint. Verifies connectivity to Postgres, Qdrant, and the MCP server (`MCP_BASE_URL` from `.env`).
@@ -457,7 +530,7 @@ GET /health
 
 ```mermaid
 flowchart TD
-    A["POST /chats/chat_id/messages\ncontent, optional model"]
+    A["POST /chats/chat_id/messages\nuser_id, chat_id, query"]
     B[input_guardrail]
     C{semantic_cache}
     D[load_memory\nST + LT context]

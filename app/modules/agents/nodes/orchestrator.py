@@ -37,8 +37,7 @@ def _build_planner_user_message(state: ZimShireState) -> str:
 
 
 async def orchestrator(state: ZimShireState, config: RunnableConfig) -> dict:
-    model_override = config.get("configurable", {}).get("model")
-    llm = get_orchestrator_model(model_override)
+    llm = get_orchestrator_model()
 
     user_msg = _build_planner_user_message(state)
 

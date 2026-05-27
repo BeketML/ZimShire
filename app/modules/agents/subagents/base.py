@@ -93,7 +93,7 @@ async def run_react_subagent(
     if not tools:
         return f"{error_label}: no MCP tools available.", extract_artifacts(agent, [])
 
-    llm = get_subagent_model(config.get("configurable", {}).get("model"))
+    llm = get_subagent_model()
     react = create_react_agent(llm, tools)
 
     try:

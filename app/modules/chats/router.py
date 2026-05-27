@@ -20,8 +20,6 @@ async def create_chat(body: ChatCreate, db: AsyncSession = Depends(get_db)) -> C
             db,
             user_id=body.user_id,
             chat_title=body.chat_title,
-            model=body.model,
-            provider=body.provider,
         )
     except NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

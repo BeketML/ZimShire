@@ -7,8 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field
 class ChatCreate(BaseModel):
     user_id: UUID
     chat_title: str | None = Field(default=None, max_length=200)
-    model: str | None = None
-    provider: str | None = None
 
 
 class ChatResponse(BaseModel):

@@ -49,8 +49,7 @@ def _build_synth_prompt(state: ZimShireState) -> str:
 
 
 async def synthesizer(state: ZimShireState, config: RunnableConfig) -> dict:
-    model_override = config.get("configurable", {}).get("model")
-    llm = get_orchestrator_model(model_override)
+    llm = get_orchestrator_model()
 
     query = state.get("query") or ""
     system_prompt = _build_synth_prompt(state)

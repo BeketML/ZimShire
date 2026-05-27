@@ -31,7 +31,7 @@ def _message_id(config: RunnableConfig) -> UUID | None:
 
 
 def _llm(config: RunnableConfig):
-    return get_chat_model(config.get("configurable", {}).get("model"))
+    return get_chat_model()
 
 
 # ── Input guardrail ────────────────────────────────────────────────────────

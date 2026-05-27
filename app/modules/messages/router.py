@@ -87,24 +87,25 @@ def _sse(event: dict) -> str:
 
 
 async def _stream_turn(chat_id: UUID, body: MessageCreate):
-    # Stage 3 — verify chat + persist human message
     async with AsyncSessionLocal() as session:
         chat = await get_chat(session, chat_id)
         if chat is None:
             yield _sse({"type": "error", "detail": "chat not found"})
             yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": None})
             return
+        if chat.user_id != body.user_id:
+            yield _sse({"type": "error", "detail": "chat does not belong to user"})
+            yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": None})
+            return
         human = await msg_repo.create_human_message(
-            session, chat_id=chat_id, content=body.content
+            session, chat_id=chat_id, content=body.query
         )
         await session.commit()
-        chat_model = body.model or chat.model
         chat_user_id = chat.user_id
         human_message_id = human.message_id
 
     handler = make_callback_handler()
 
-    # Stage 4-9 — run graph to completion inside Langfuse trace context
     graph = get_graph()
     store = get_store()
     config = {
@@ -112,12 +113,15 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
             "thread_id": str(chat_id),
             "user_id": str(chat_user_id),
             "chat_id": str(chat_id),
-            "model": chat_model,
             "human_message_id": str(human_message_id),
+            "query": body.query,
         },
         "callbacks": [handler] if handler is not None else [],
     }
-    inputs = {"messages": [HumanMessage(content=body.content)]}
+    inputs = {
+        "messages": [HumanMessage(content=body.query)],
+        "query": body.query,
+    }
 
     final_state: dict = {}
     try:
@@ -132,10 +136,8 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
         langfuse_flush()
         return
 
-    # Resolve trace_id now that the run is complete
     trace_id = get_trace_id(handler)
 
-    # Handle input_blocked
     if final_state.get("input_blocked"):
         reason = final_state.get("input_blocked_reason") or "Query rejected by input guardrail."
         yield _sse({"type": "blocked", "reason": reason})
@@ -143,18 +145,16 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
         langfuse_flush()
         return
 
-    # Stage 9.5 — stream approved draft_answer as token events
     approved_text = final_state.get("draft_answer") or ""
     for piece in _chunk_text(approved_text):
         yield _sse({"type": "token", "content": piece + " "})
 
-    # Stage 10 — persist
     async with AsyncSessionLocal() as session:
         assistant_msg = await persist_assistant_turn(
             session,
             chat_id=chat_id,
             user_id=chat_user_id,
-            user_query=body.content,
+            user_query=body.query,
             final_state=final_state,
             langfuse_trace_id=trace_id,
             store=store,
@@ -176,6 +176,11 @@ async def _stream_turn(chat_id: UUID, body: MessageCreate):
 
 @router.post("/{chat_id}/messages")
 async def post_message(chat_id: UUID, body: MessageCreate):
+    if body.chat_id != chat_id:
+        raise HTTPException(
+            status_code=422,
+            detail="chat_id in body must match chat_id in path",
+        )
     return StreamingResponse(
         _stream_turn(chat_id, body),
         media_type="text/event-stream",

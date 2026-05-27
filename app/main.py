@@ -13,6 +13,7 @@ from app.modules.agents.service import close_graph, init_graph
 from app.modules.users.router import router as users_router
 from app.modules.chats.router import router as chats_router
 from app.modules.messages.router import router as messages_router
+from app.modules.chat_history.router import router as chat_history_router
 
 
 @asynccontextmanager
@@ -29,6 +30,7 @@ app = FastAPI(title="ZimShire", version="0.1.0", lifespan=lifespan)
 app.include_router(users_router)
 app.include_router(chats_router)
 app.include_router(messages_router)
+app.include_router(chat_history_router)
 
 
 async def _check_postgres() -> str:

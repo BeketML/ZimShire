@@ -6,8 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class MessageCreate(BaseModel):
-    content: str = Field(min_length=1, max_length=2000)
-    model: str | None = Field(default=None, description="Per-turn model override")
+    user_id: UUID
+    chat_id: UUID
+    query: str = Field(min_length=1, max_length=2000)
 
 
 class SourceItem(BaseModel):
