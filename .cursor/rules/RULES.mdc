@@ -8,7 +8,7 @@ alwaysApply: true
 Данный документ определяет стандарты проектирования, структуру папок и правила написания кода для проекта ZimShire (FastAPI + SQLAlchemy + LangGraph + MCP). Все изменения и новые модули обязаны строго следовать этим правилам.
 
 **Каноничная документация (источники истины):**
-- `docs/api_endpoints.md` — 9 HTTP-эндпоинтов, контракт SSE
+- `docs/api_endpoints.md` — 13 HTTP-эндпоинтов, контракт SSE
 - `docs/agent_architecture.md` — граф, `ZimShireState`, guardrails, узлы
 - `docs/assistant_flow.md` — Stage 1–10, read/write по таблицам на каждом этапе
 - `docs/db_schema_reference.md` — ORM-схемы и LangGraph-таблицы
@@ -267,9 +267,9 @@ faithfulness_guardrail → END
 
 ---
 
-## 8. API-контракт (9 эндпоинтов)
+## 8. API-контракт (13 эндпоинтов)
 
-Ровно 9 публичных эндпоинтов согласно `docs/api_endpoints.md`. Добавление новых требует обновления docs.
+Ровно 13 публичных эндпоинтов согласно `docs/api_endpoints.md`. Добавление новых требует обновления docs.
 
 | Метод | Путь |
 |-------|------|
@@ -281,6 +281,10 @@ faithfulness_guardrail → END
 | POST | `/chats/{chat_id}/messages` (SSE) |
 | GET | `/users/{user_id}/memory/long-term` |
 | GET | `/users/{user_id}/chats/{chat_id}/memory/short-term` |
+| GET | `/debug/semantic-cache` |
+| GET | `/debug/market-data-cache` |
+| GET | `/chats/{chat_id}/rag-retrievals` |
+| GET | `/chats/{chat_id}/guardrail-logs` |
 | GET | `/health` |
 
 **SSE-события:** `token`, `blocked`, `done`. `done` всегда последний.
