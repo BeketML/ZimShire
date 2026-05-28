@@ -8,33 +8,40 @@ from langchain_core.runnables import RunnableConfig
 
 from app.modules.agents.schemas import OrchestratorPlan, SubagentResult
 from app.modules.agents.state import ZimShireState
-from app.modules.agents.subagents.market_subagent import run_market_subagent
-from app.modules.agents.subagents.rag_subagent import run_rag_subagent
-from app.modules.agents.subagents.web_subagent import run_web_subagent
+from app.modules.agents.subagents.registry import SUBAGENT_REGISTRY
 
 logger = logging.getLogger(__name__)
+
+_EMPTY = {
+    "subagent_results": [],
+    "collected_context": {},
+    "rag_agent_chunks": [],
+    "web_agent_sources": [],
+    "rag_invoked": False,
+}
 
 
 async def run_subagents(state: ZimShireState, config: RunnableConfig) -> dict:
     plan_dict = state.get("subagent_plan") or {}
     if not plan_dict:
-        return {"subagent_results": [], "collected_context": {}, "rag_agent_chunks": [], "web_agent_sources": [], "rag_invoked": False}
+        return _EMPTY
 
     plan = OrchestratorPlan(**plan_dict)
     enabled = [item for item in plan.subagents if item.enabled]
-
     if not enabled:
-        return {"subagent_results": [], "collected_context": {}, "rag_agent_chunks": [], "web_agent_sources": [], "rag_invoked": False}
+        return _EMPTY
 
     async def _run_one(item) -> SubagentResult:
-        if item.name == "rag":
-            return await run_rag_subagent(sub_query=item.query, years=item.years, config=config)
-        elif item.name == "market":
-            return await run_market_subagent(
-                sub_query=item.query, tickers=item.tickers, data_type=item.data_type or "info", config=config
+        strategy = SUBAGENT_REGISTRY.get(item.name)
+        if strategy is None:
+            logger.warning("unknown subagent: %s — skipping", item.name)
+            return SubagentResult(
+                agent_name=item.name,
+                sub_query=item.query,
+                formatted_context="",
+                raw_artifacts={},
             )
-        else:
-            return await run_web_subagent(sub_query=item.query, config=config)
+        return await strategy.run(item, config)
 
     results: list[SubagentResult] = await asyncio.gather(*(_run_one(item) for item in enabled))
 
