@@ -51,15 +51,10 @@ def _build_synth_prompt(state: ZimShireState) -> str:
 
 async def synthesizer(state: ZimShireState, config: RunnableConfig) -> dict:
     llm = get_orchestrator_model()
-
     query = state.get("query") or ""
     system_prompt = _build_synth_prompt(state)
 
     try:
-        # Use astream so LangGraph captures tokens for real-time SSE streaming.
-        # ainvoke collects the full response before returning; astream emits
-        # on_chat_model_stream events per token, which stream_mode="messages"
-        # forwards to the client without waiting for synthesis to complete.
         full_content = ""
         async for chunk in llm.astream(
             [SystemMessage(content=system_prompt), HumanMessage(content=f"QUERY: {query}")],
