@@ -5,7 +5,7 @@ import logging
 
 from langchain_core.tools import BaseTool
 
-from app.modules.agents.tool_allowlists import (
+from app.modules.agents.mcp.allowlists import (
     AGENT_PRIMARY_TAG,
     AGENT_TOOL_ALLOWLIST,
     EXCLUDE_TAGS,

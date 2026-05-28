@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db
-from app.modules.agents.service import get_graph, get_store
+from app.modules.agents import get_graph, get_store
 from app.modules.chat_history.long_term.schemas import UserProfile
 from app.modules.chat_history.long_term.service import LongTermMemoryService
 from app.modules.chat_history.short_term.gateways import load_messages_from_checkpointer

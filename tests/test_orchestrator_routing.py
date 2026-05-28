@@ -1,7 +1,7 @@
 """Tests for orchestrator plan schema and subagent routing logic."""
 import pytest
 
-from app.modules.agents.schemas import OrchestratorPlan, SubagentPlanItem, SubagentResult
+from app.modules.agents.graph.schemas import OrchestratorPlan, SubagentPlanItem, SubagentResult
 
 
 def _plan(rag=False, market=False, web=False, direct=False) -> OrchestratorPlan:

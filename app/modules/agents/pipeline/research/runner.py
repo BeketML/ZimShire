@@ -6,9 +6,9 @@ import logging
 
 from langchain_core.runnables import RunnableConfig
 
-from app.modules.agents.schemas import OrchestratorPlan, SubagentResult
-from app.modules.agents.state import ZimShireState
-from app.modules.agents.subagents.registry import SUBAGENT_REGISTRY
+from app.modules.agents.graph.schemas import OrchestratorPlan, SubagentResult
+from app.modules.agents.graph.state import ZimShireState
+from app.modules.agents.pipeline.research.registry import SUBAGENT_REGISTRY
 
 logger = logging.getLogger(__name__)
 

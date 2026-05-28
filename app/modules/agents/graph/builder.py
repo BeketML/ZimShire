@@ -22,23 +22,23 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.store.base import BaseStore
 
-from app.modules.agents.nodes.cache import semantic_cache_check
-from app.modules.agents.nodes.guardrails import (
-    faithfulness_guardrail,
-    input_guardrail,
-    output_guardrail,
-)
-from app.modules.agents.nodes.memory import load_memory
-from app.modules.agents.nodes.orchestrator import orchestrator
-from app.modules.agents.nodes.subagent_runner import run_subagents
-from app.modules.agents.nodes.synthesizer import synthesizer
-from app.modules.agents.observability import wrap_node
-from app.modules.agents.routing import (
+from app.modules.agents.graph.routing import (
     route_after_cache,
     route_after_input,
     route_after_output_guardrail,
 )
-from app.modules.agents.state import ZimShireState
+from app.modules.agents.graph.state import ZimShireState
+from app.modules.agents.pipeline import (
+    faithfulness_guardrail,
+    input_guardrail,
+    load_memory,
+    orchestrator,
+    output_guardrail,
+    run_subagents,
+    semantic_cache_check,
+    synthesizer,
+)
+from app.modules.agents.runtime.observability import wrap_node
 
 
 def build_graph(checkpointer: BaseCheckpointSaver, store: BaseStore):

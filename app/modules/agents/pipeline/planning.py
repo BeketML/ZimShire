@@ -1,7 +1,6 @@
 """Orchestrator planner node — structured output, no tool calls."""
 from __future__ import annotations
 
-import json
 import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -9,8 +8,8 @@ from langchain_core.runnables import RunnableConfig
 
 from app.core.exceptions import AgentPlanError
 from app.core.prompts import ORCHESTRATOR_PLANNER_PROMPT
-from app.modules.agents.schemas import OrchestratorPlan
-from app.modules.agents.state import ZimShireState
+from app.modules.agents.graph.schemas import OrchestratorPlan
+from app.modules.agents.graph.state import ZimShireState
 from app.modules.chat_history.short_term.service import ShortTermMemoryService
 from app.services.llm import get_orchestrator_model
 

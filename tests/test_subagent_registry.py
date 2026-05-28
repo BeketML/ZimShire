@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agents.subagents.registry import SUBAGENT_REGISTRY
+from app.modules.agents.pipeline.research.registry import SUBAGENT_REGISTRY
 
 
 def test_registry_has_all_three_agents():
@@ -24,7 +24,7 @@ def test_unknown_agent_not_in_registry():
 @pytest.mark.asyncio
 async def test_subagent_runner_empty_plan_returns_empty():
     """An empty subagent plan returns the empty-result dict."""
-    from app.modules.agents.nodes.subagent_runner import run_subagents
+    from app.modules.agents.pipeline.research.runner import run_subagents
 
     state = {"subagent_plan": {"subagents": [], "direct_answer_possible": True}}
     result = await run_subagents(state, {"configurable": {}})

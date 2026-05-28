@@ -7,8 +7,8 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from app.modules.agents.tool_allowlists import MARKET_TOOL_MAP, AgentName
-from app.modules.agents.tool_registry import get_all_tools, matches_agent
+from app.modules.agents.mcp.allowlists import MARKET_TOOL_MAP, AgentName
+from app.modules.agents.mcp.registry import get_all_tools, matches_agent
 from app.modules.cache.gateways import lookup_market, store_market
 from app.services.langfuse_service import observe_tool_call
 

@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from app.core.prompts import ORCHESTRATOR_SYNTH_PROMPT
-from app.modules.agents.state import ZimShireState
+from app.modules.agents.graph.state import ZimShireState
 from app.modules.chat_history.short_term.service import ShortTermMemoryService
 from app.services.llm import get_orchestrator_model
 

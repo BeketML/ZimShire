@@ -5,7 +5,7 @@ from typing import Protocol
 
 from langchain_core.runnables import RunnableConfig
 
-from app.modules.agents.schemas import SubagentPlanItem, SubagentResult
+from app.modules.agents.graph.schemas import SubagentPlanItem, SubagentResult
 
 
 class SubagentStrategy(Protocol):
@@ -14,14 +14,14 @@ class SubagentStrategy(Protocol):
 
 class _RAGStrategy:
     async def run(self, item: SubagentPlanItem, config: RunnableConfig) -> SubagentResult:
-        from app.modules.agents.subagents.rag_subagent import run_rag_subagent
+        from app.modules.agents.pipeline.research.subagents import run_rag_subagent
 
         return await run_rag_subagent(sub_query=item.query, years=item.years, config=config)
 
 
 class _MarketStrategy:
     async def run(self, item: SubagentPlanItem, config: RunnableConfig) -> SubagentResult:
-        from app.modules.agents.subagents.market_subagent import run_market_subagent
+        from app.modules.agents.pipeline.research.subagents import run_market_subagent
 
         return await run_market_subagent(
             sub_query=item.query,
@@ -33,7 +33,7 @@ class _MarketStrategy:
 
 class _WebStrategy:
     async def run(self, item: SubagentPlanItem, config: RunnableConfig) -> SubagentResult:
-        from app.modules.agents.subagents.web_subagent import run_web_subagent
+        from app.modules.agents.pipeline.research.subagents import run_web_subagent
 
         return await run_web_subagent(sub_query=item.query, config=config)
 

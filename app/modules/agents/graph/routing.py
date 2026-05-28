@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.modules.agents.state import ZimShireState
+from app.modules.agents.graph.state import ZimShireState
 
 
 def route_after_input(state: ZimShireState) -> str:

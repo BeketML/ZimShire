@@ -1,6 +1,6 @@
 """LangGraph → MCP via langchain-mcp-adapters (streamable HTTP).
 
-Single MCP server (mcp_server.main) — tools filtered by tag in mcp_registry.
+Single MCP server (mcp_server.main) — tools filtered by tag in mcp/registry.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import asyncio
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from app.modules.agents.mcp_registry import get_agent_tools, set_all_tools
+from app.modules.agents.mcp import get_agent_tools, set_all_tools
 
 _client: MultiServerMCPClient | None = None
 _tools: dict[str, BaseTool] = {}

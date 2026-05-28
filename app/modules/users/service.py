@@ -20,7 +20,7 @@ async def create_user(
 
     # Initialise long-term memory profile in the store (best-effort)
     try:
-        from app.modules.agents.service import get_store
+        from app.modules.agents import get_store
         from app.modules.chat_history.long_term.service import LongTermMemoryService
         store = get_store()
         svc = LongTermMemoryService(store)

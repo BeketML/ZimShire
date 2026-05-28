@@ -13,7 +13,7 @@ def _make_tool(name: str, tags: list[str] | None = None) -> MagicMock:
 
 
 def test_tool_registry_set_and_get():
-    from app.modules.agents.tool_registry import ToolRegistry
+    from app.modules.agents.mcp.registry import ToolRegistry
 
     registry = ToolRegistry()
     tools = {
@@ -25,7 +25,7 @@ def test_tool_registry_set_and_get():
 
 
 def test_tool_registry_empty_raises():
-    from app.modules.agents.tool_registry import ToolRegistry
+    from app.modules.agents.mcp.registry import ToolRegistry
 
     registry = ToolRegistry()
     with pytest.raises(RuntimeError, match="empty"):
@@ -33,7 +33,7 @@ def test_tool_registry_empty_raises():
 
 
 def test_matches_agent_rag_by_tag():
-    from app.modules.agents.tool_registry import matches_agent
+    from app.modules.agents.mcp.registry import matches_agent
 
     tool = _make_tool("search_buffett_letters", ["rag"])
     assert matches_agent("search_buffett_letters", tool, "rag") is True
@@ -41,7 +41,7 @@ def test_matches_agent_rag_by_tag():
 
 
 def test_matches_agent_market_by_allowlist():
-    from app.modules.agents.tool_registry import matches_agent
+    from app.modules.agents.mcp.registry import matches_agent
 
     # No tags — fallback to allowlist
     tool = _make_tool("get_stock_price")
@@ -50,7 +50,7 @@ def test_matches_agent_market_by_allowlist():
 
 
 def test_ui_tool_excluded():
-    from app.modules.agents.tool_registry import matches_agent
+    from app.modules.agents.mcp.registry import matches_agent
 
     tool = _make_tool("get_stock_price_ui", ["market", "ui"])
     assert matches_agent("get_stock_price_ui", tool, "market") is False

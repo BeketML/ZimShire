@@ -33,14 +33,14 @@ def _make_llm_resp(content: str):
 
 @pytest.mark.asyncio
 async def test_input_guardrail_passes_research_question():
-    from app.modules.agents.nodes.guardrails import input_guardrail
+    from app.modules.agents.pipeline.preflight import input_guardrail
 
     state = {"messages": [HumanMessage(content="How would Buffett evaluate Apple's moat?")]}
     resp_json = json.dumps({"blocked": False, "reason": None})
 
     with (
-        patch("app.modules.agents.nodes.input_guardrail.get_guardrail_model") as mock_model,
-        patch("app.modules.agents.nodes.input_guardrail.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.pipeline.preflight.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.pipeline.preflight.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await input_guardrail(state, _make_config())
@@ -51,14 +51,14 @@ async def test_input_guardrail_passes_research_question():
 
 @pytest.mark.asyncio
 async def test_input_guardrail_blocks_off_topic():
-    from app.modules.agents.nodes.guardrails import input_guardrail
+    from app.modules.agents.pipeline.preflight import input_guardrail
 
     state = {"messages": [HumanMessage(content="What's the best recipe for pasta?")]}
     resp_json = json.dumps({"blocked": True, "reason": "off-topic: cooking"})
 
     with (
-        patch("app.modules.agents.nodes.input_guardrail.get_guardrail_model") as mock_model,
-        patch("app.modules.agents.nodes.input_guardrail.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.pipeline.preflight.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.pipeline.preflight.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await input_guardrail(state, _make_config())
@@ -70,14 +70,14 @@ async def test_input_guardrail_blocks_off_topic():
 
 @pytest.mark.asyncio
 async def test_input_guardrail_blocks_personal_advice():
-    from app.modules.agents.nodes.guardrails import input_guardrail
+    from app.modules.agents.pipeline.preflight import input_guardrail
 
     state = {"messages": [HumanMessage(content="Should I buy Apple stock right now?")]}
     resp_json = json.dumps({"blocked": True, "reason": "personal investment advice"})
 
     with (
-        patch("app.modules.agents.nodes.input_guardrail.get_guardrail_model") as mock_model,
-        patch("app.modules.agents.nodes.input_guardrail.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.pipeline.preflight.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.pipeline.preflight.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await input_guardrail(state, _make_config())
@@ -88,13 +88,13 @@ async def test_input_guardrail_blocks_personal_advice():
 @pytest.mark.asyncio
 async def test_input_guardrail_allows_on_llm_failure():
     """If LLM call throws, guardrail fails open (allow through)."""
-    from app.modules.agents.nodes.guardrails import input_guardrail
+    from app.modules.agents.pipeline.preflight import input_guardrail
 
     state = {"messages": [HumanMessage(content="Tell me about Berkshire Hathaway")]}
 
     with (
-        patch("app.modules.agents.nodes.input_guardrail.get_guardrail_model") as mock_model,
-        patch("app.modules.agents.nodes.input_guardrail.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.pipeline.preflight.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.pipeline.preflight.write_guardrail_log", new_callable=AsyncMock),
     ):
         failing_llm = MagicMock()
         failing_llm.ainvoke = AsyncMock(side_effect=Exception("network error"))
@@ -109,7 +109,7 @@ async def test_input_guardrail_allows_on_llm_failure():
 
 @pytest.mark.asyncio
 async def test_output_guardrail_passes_clean_answer():
-    from app.modules.agents.nodes.guardrails import output_guardrail
+    from app.modules.agents.pipeline.safety import output_guardrail
 
     state = {
         "messages": [],
@@ -127,8 +127,8 @@ async def test_output_guardrail_passes_clean_answer():
         "feedback": None,
     })
     with (
-        patch("app.modules.agents.nodes.output_guardrail.get_guardrail_model") as mock_model,
-        patch("app.modules.agents.nodes.output_guardrail.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.pipeline.safety.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.pipeline.safety.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await output_guardrail(state, _make_config())
@@ -139,7 +139,7 @@ async def test_output_guardrail_passes_clean_answer():
 
 @pytest.mark.asyncio
 async def test_output_guardrail_catches_buy_sell():
-    from app.modules.agents.nodes.guardrails import output_guardrail
+    from app.modules.agents.pipeline.safety import output_guardrail
 
     state = {
         "messages": [],
@@ -157,8 +157,8 @@ async def test_output_guardrail_catches_buy_sell():
         "feedback": "Remove the buy recommendation and reframe as analysis.",
     })
     with (
-        patch("app.modules.agents.nodes.output_guardrail.get_guardrail_model") as mock_model,
-        patch("app.modules.agents.nodes.output_guardrail.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.pipeline.safety.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.pipeline.safety.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await output_guardrail(state, _make_config())
@@ -172,7 +172,7 @@ async def test_output_guardrail_catches_buy_sell():
 
 @pytest.mark.asyncio
 async def test_output_guardrail_fallback_after_max_retries():
-    from app.modules.agents.nodes.guardrails import output_guardrail
+    from app.modules.agents.pipeline.safety import output_guardrail
 
     state = {
         "messages": [],
@@ -190,8 +190,8 @@ async def test_output_guardrail_fallback_after_max_retries():
         "feedback": "Remove price target.",
     })
     with (
-        patch("app.modules.agents.nodes.output_guardrail.get_guardrail_model") as mock_model,
-        patch("app.modules.agents.nodes.output_guardrail.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.pipeline.safety.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.pipeline.safety.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await output_guardrail(state, _make_config())
@@ -205,10 +205,10 @@ async def test_output_guardrail_fallback_after_max_retries():
 
 @pytest.mark.asyncio
 async def test_faithfulness_grounded_none_when_rag_not_invoked():
-    from app.modules.agents.nodes.guardrails import faithfulness_guardrail
+    from app.modules.agents.pipeline.safety import faithfulness_guardrail
 
     state = {"rag_invoked": False, "rag_agent_chunks": [], "collected_context": {}, "query": ""}
-    with patch("app.modules.agents.nodes.faithfulness_guardrail.write_guardrail_log", new_callable=AsyncMock):
+    with patch("app.modules.agents.pipeline.safety.write_guardrail_log", new_callable=AsyncMock):
         result = await faithfulness_guardrail(state, _make_config())
 
     assert result["grounded"] is None
@@ -217,7 +217,7 @@ async def test_faithfulness_grounded_none_when_rag_not_invoked():
 
 @pytest.mark.asyncio
 async def test_faithfulness_grounded_true():
-    from app.modules.agents.nodes.guardrails import faithfulness_guardrail
+    from app.modules.agents.pipeline.safety import faithfulness_guardrail
 
     chunks = [
         {"letter_year": 1988, "passage_snippet": "moats are durable", "similarity_score": 0.91, "qdrant_point_id": "abc"},
@@ -232,8 +232,8 @@ async def test_faithfulness_grounded_true():
     }
     resp_json = json.dumps({"grounded": True, "score": 0.90, "unsupported_claims": []})
     with (
-        patch("app.modules.agents.nodes.faithfulness_guardrail.get_guardrail_model") as mock_model,
-        patch("app.modules.agents.nodes.faithfulness_guardrail.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.pipeline.safety.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.pipeline.safety.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await faithfulness_guardrail(state, _make_config())
@@ -244,7 +244,7 @@ async def test_faithfulness_grounded_true():
 
 @pytest.mark.asyncio
 async def test_faithfulness_grounded_false_low_score():
-    from app.modules.agents.nodes.guardrails import faithfulness_guardrail
+    from app.modules.agents.pipeline.safety import faithfulness_guardrail
 
     chunks = [
         {"letter_year": 1988, "passage_snippet": "a short passage", "similarity_score": 0.80, "qdrant_point_id": "abc"},
@@ -258,8 +258,8 @@ async def test_faithfulness_grounded_false_low_score():
     }
     resp_json = json.dumps({"grounded": False, "score": 0.30, "unsupported_claims": ["claim1"]})
     with (
-        patch("app.modules.agents.nodes.faithfulness_guardrail.get_guardrail_model") as mock_model,
-        patch("app.modules.agents.nodes.faithfulness_guardrail.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.pipeline.safety.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.pipeline.safety.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await faithfulness_guardrail(state, _make_config())

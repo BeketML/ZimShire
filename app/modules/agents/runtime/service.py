@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.modules.agents.graph_factory import build_checkpointer_and_store
+from app.modules.agents.runtime.graph_factory import build_checkpointer_and_store
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ _state: dict[str, Any] = {
 
 
 async def init_graph(database_url: str) -> None:
-    from app.modules.agents.builder import build_graph
+    from app.modules.agents.graph.builder import build_graph
 
     checkpointer, store, cm_checkpointer, cm_store = await build_checkpointer_and_store(database_url)
     graph = build_graph(checkpointer, store)
