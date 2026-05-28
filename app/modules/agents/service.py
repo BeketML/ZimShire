@@ -1,8 +1,10 @@
-"""LangGraph lifecycle — checkpointer + store + compiled graph."""
+"""LangGraph lifecycle — init, close, get_graph, get_store."""
 from __future__ import annotations
 
 import logging
 from typing import Any
+
+from app.modules.agents.graph_factory import build_checkpointer_and_store
 
 logger = logging.getLogger(__name__)
 
@@ -14,37 +16,10 @@ _state: dict[str, Any] = {
 }
 
 
-def _to_psycopg_dsn(url: str) -> str:
-    if url.startswith("postgresql+asyncpg://"):
-        return "postgresql://" + url[len("postgresql+asyncpg://"):]
-    if url.startswith("postgresql+psycopg://"):
-        return "postgresql://" + url[len("postgresql+psycopg://"):]
-    return url
-
-
 async def init_graph(database_url: str) -> None:
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    from langgraph.store.postgres.aio import AsyncPostgresStore
-
     from app.modules.agents.builder import build_graph
-    from app.services.embedding import embed_text
 
-    dsn = _to_psycopg_dsn(database_url)
-
-    cm_checkpointer = AsyncPostgresSaver.from_conn_string(dsn)
-    checkpointer = await cm_checkpointer.__aenter__()
-    await checkpointer.setup()
-
-    async def _embed_for_store(texts: list[str]) -> list[list[float]]:
-        return [await embed_text(t) for t in texts]
-
-    cm_store = AsyncPostgresStore.from_conn_string(
-        dsn,
-        index={"dims": 1536, "embed": _embed_for_store, "fields": ["interest", "company"]},
-    )
-    store = await cm_store.__aenter__()
-    await store.setup()
-
+    checkpointer, store, cm_checkpointer, cm_store = await build_checkpointer_and_store(database_url)
     graph = build_graph(checkpointer, store)
 
     _state["graph"] = graph

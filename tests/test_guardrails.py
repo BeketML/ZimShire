@@ -39,8 +39,8 @@ async def test_input_guardrail_passes_research_question():
     resp_json = json.dumps({"blocked": False, "reason": None})
 
     with (
-        patch("app.modules.agents.nodes.guardrails.get_chat_model") as mock_model,
-        patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.nodes.input_guardrail.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.nodes.input_guardrail.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await input_guardrail(state, _make_config())
@@ -57,8 +57,8 @@ async def test_input_guardrail_blocks_off_topic():
     resp_json = json.dumps({"blocked": True, "reason": "off-topic: cooking"})
 
     with (
-        patch("app.modules.agents.nodes.guardrails.get_chat_model") as mock_model,
-        patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.nodes.input_guardrail.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.nodes.input_guardrail.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await input_guardrail(state, _make_config())
@@ -76,8 +76,8 @@ async def test_input_guardrail_blocks_personal_advice():
     resp_json = json.dumps({"blocked": True, "reason": "personal investment advice"})
 
     with (
-        patch("app.modules.agents.nodes.guardrails.get_chat_model") as mock_model,
-        patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.nodes.input_guardrail.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.nodes.input_guardrail.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await input_guardrail(state, _make_config())
@@ -93,8 +93,8 @@ async def test_input_guardrail_allows_on_llm_failure():
     state = {"messages": [HumanMessage(content="Tell me about Berkshire Hathaway")]}
 
     with (
-        patch("app.modules.agents.nodes.guardrails.get_chat_model") as mock_model,
-        patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.nodes.input_guardrail.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.nodes.input_guardrail.write_guardrail_log", new_callable=AsyncMock),
     ):
         failing_llm = MagicMock()
         failing_llm.ainvoke = AsyncMock(side_effect=Exception("network error"))
@@ -127,8 +127,8 @@ async def test_output_guardrail_passes_clean_answer():
         "feedback": None,
     })
     with (
-        patch("app.modules.agents.nodes.guardrails.get_chat_model") as mock_model,
-        patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.nodes.output_guardrail.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.nodes.output_guardrail.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await output_guardrail(state, _make_config())
@@ -157,8 +157,8 @@ async def test_output_guardrail_catches_buy_sell():
         "feedback": "Remove the buy recommendation and reframe as analysis.",
     })
     with (
-        patch("app.modules.agents.nodes.guardrails.get_chat_model") as mock_model,
-        patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.nodes.output_guardrail.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.nodes.output_guardrail.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await output_guardrail(state, _make_config())
@@ -190,8 +190,8 @@ async def test_output_guardrail_fallback_after_max_retries():
         "feedback": "Remove price target.",
     })
     with (
-        patch("app.modules.agents.nodes.guardrails.get_chat_model") as mock_model,
-        patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.nodes.output_guardrail.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.nodes.output_guardrail.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await output_guardrail(state, _make_config())
@@ -208,7 +208,7 @@ async def test_faithfulness_grounded_none_when_rag_not_invoked():
     from app.modules.agents.nodes.guardrails import faithfulness_guardrail
 
     state = {"rag_invoked": False, "rag_agent_chunks": [], "collected_context": {}, "query": ""}
-    with patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock):
+    with patch("app.modules.agents.nodes.faithfulness_guardrail.write_guardrail_log", new_callable=AsyncMock):
         result = await faithfulness_guardrail(state, _make_config())
 
     assert result["grounded"] is None
@@ -232,8 +232,8 @@ async def test_faithfulness_grounded_true():
     }
     resp_json = json.dumps({"grounded": True, "score": 0.90, "unsupported_claims": []})
     with (
-        patch("app.modules.agents.nodes.guardrails.get_chat_model") as mock_model,
-        patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.nodes.faithfulness_guardrail.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.nodes.faithfulness_guardrail.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await faithfulness_guardrail(state, _make_config())
@@ -258,8 +258,8 @@ async def test_faithfulness_grounded_false_low_score():
     }
     resp_json = json.dumps({"grounded": False, "score": 0.30, "unsupported_claims": ["claim1"]})
     with (
-        patch("app.modules.agents.nodes.guardrails.get_chat_model") as mock_model,
-        patch("app.modules.agents.nodes.guardrails.write_guardrail_log", new_callable=AsyncMock),
+        patch("app.modules.agents.nodes.faithfulness_guardrail.get_guardrail_model") as mock_model,
+        patch("app.modules.agents.nodes.faithfulness_guardrail.write_guardrail_log", new_callable=AsyncMock),
     ):
         mock_model.return_value = _make_llm_resp(resp_json)
         result = await faithfulness_guardrail(state, _make_config())
