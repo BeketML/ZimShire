@@ -7,7 +7,6 @@ from typing import AsyncIterator
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
 from app.modules.messages import repository as msg_repo
@@ -19,6 +18,12 @@ from app.services.langfuse_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SUBAGENT_LABELS: dict[str, str] = {
+    "rag": "Searching Buffett letters…",
+    "market": "Fetching market data…",
+    "web": "Searching the web…",
+}
 
 
 def _chunk_text(text: str, words_per_chunk: int = 4) -> list[str]:
@@ -76,29 +81,77 @@ class TurnOrchestrationService:
         inputs = {"messages": [HumanMessage(content=query)], "query": query}
 
         final_state: dict = {}
+        synthesis_started = False
+        progress_state = {"plan_emitted": False, "context_emitted": False}
+
         try:
-            async for chunk in self._graph.astream(inputs, config=config, stream_mode="values"):
-                final_state = chunk
+            # stream_mode=["messages", "values"] yields (typ, chunk) tuples:
+            #   "messages" → (AIMessageChunk, metadata) — real LLM tokens per node
+            #   "values"   → full state dict after each node — used for progress events
+            async for typ, chunk in self._graph.astream(
+                inputs, config=config, stream_mode=["messages", "values"]
+            ):
+                if typ == "messages":
+                    msg_chunk, metadata = chunk
+                    node = metadata.get("langgraph_node", "")
+                    content = getattr(msg_chunk, "content", None)
+                    if node == "synthesizer" and isinstance(content, str) and content:
+                        synthesis_started = True
+                        yield _sse({"type": "token", "content": content})
+
+                elif typ == "values":
+                    final_state = chunk
+
+                    # Orchestrator plan landed → subagents about to start
+                    if chunk.get("subagent_plan") and not progress_state["plan_emitted"]:
+                        progress_state["plan_emitted"] = True
+                        for item in (chunk["subagent_plan"].get("subagents") or []):
+                            if item.get("enabled"):
+                                label = _SUBAGENT_LABELS.get(item["name"])
+                                if label:
+                                    yield _sse({
+                                        "type": "progress",
+                                        "stage": item["name"],
+                                        "message": label,
+                                    })
+
+                    # Subagents done → synthesis about to start
+                    if chunk.get("collected_context") and not progress_state["context_emitted"]:
+                        progress_state["context_emitted"] = True
+                        yield _sse({
+                            "type": "progress",
+                            "stage": "synthesizing",
+                            "message": "Composing answer…",
+                        })
+
         except Exception as exc:
             logger.exception("graph run failed: %s", exc)
             trace_id = get_trace_id(handler)
             yield _sse({"type": "error", "detail": str(exc)})
-            yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": trace_id})
+            yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": trace_id, "cache_hit": False})
             langfuse_flush()
             return
 
         trace_id = get_trace_id(handler)
 
+        # Input was blocked — no synthesis occurred
         if final_state.get("input_blocked"):
             reason = final_state.get("input_blocked_reason") or "Query rejected by input guardrail."
             yield _sse({"type": "blocked", "reason": reason})
-            yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": trace_id})
+            yield _sse({"type": "done", "message_id": None, "grounded": None, "sources": [], "langfuse_trace_id": trace_id, "cache_hit": False})
             langfuse_flush()
             return
 
         approved_text = final_state.get("draft_answer") or ""
-        for piece in _chunk_text(approved_text):
-            yield _sse({"type": "token", "content": piece + " "})
+
+        # Output guardrail rewrote content that was already streamed to the client
+        if synthesis_started and final_state.get("output_rewritten"):
+            yield _sse({"type": "replace", "content": approved_text})
+
+        # No synthesis tokens were sent (cache hit or edge case) — stream text now
+        if not synthesis_started and approved_text:
+            for piece in _chunk_text(approved_text):
+                yield _sse({"type": "token", "content": piece + " "})
 
         async with AsyncSessionLocal() as session:
             assistant_msg = await persist_assistant_turn(

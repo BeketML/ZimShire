@@ -662,18 +662,44 @@ UI-tagged tools and analyst-recommendation tools are excluded from the agent to 
 
 Instead of one monolithic ReAct orchestrator, ZimShire uses a **planner → parallel executors → synthesizer** pattern:
 
-1. **Orchestrator (planner)** — structured output `OrchestratorPlan`: selects 0–3 subagents (`rag`, `market`, `web`) with sub-queries and parameters. No tool calls in this node.
-2. **run_subagents** — runs enabled subagents in parallel via `asyncio.gather`.
-3. **Subagents** — independent ReAct loops (`create_react_agent`) with MCP tools filtered per agent.
-4. **Synthesizer** — writes final `draft_answer` from `collected_context` and conversation history.
-5. **Guardrails** — output check with retry loop back to synthesizer (max 2 retries), then faithfulness scoring.
+1. **Orchestrator (planner)** — structured output `OrchestratorPlan`: selects 0–3 subagents (`rag`, `market`, `web`) with sub-queries and parameters. Sets `direct_answer_possible: true` for pure follow-up turns that need no data retrieval. No tool calls in this node.
+2. **run_subagents** — runs enabled subagents in parallel via `asyncio.gather`. Skips all three when `direct_answer_possible` is set; each subagent still goes through a full `create_react_agent` ReAct loop but with zero tool calls enabled.
+3. **Subagents** — independent ReAct loops with MCP tools filtered per agent type (`rag`, `market`, `web` allowlists).
+4. **Synthesizer** — writes final `draft_answer` from `collected_context` and conversation history. Receives `feedback_message` from the output guardrail on retry turns.
+5. **Guardrails** — output check with retry loop back to synthesizer (max `OUTPUT_GUARDRAIL_MAX_RETRIES` retries, default 2), then faithfulness scoring.
 
-### State vs config
+### Graph state fields
 
-`ZimShireState` holds graph data (`messages`, `collected_context`, `draft_answer`, guardrail flags). Session identifiers live in `RunnableConfig["configurable"]`:
+`ZimShireState` (TypedDict) holds all graph-visible data. Session identifiers that must not be checkpointed live in `RunnableConfig["configurable"]`:
+
+| State field | Type | Purpose |
+|-------------|------|---------|
+| `messages` | `Annotated[list[BaseMessage], add_messages]` | Full conversation (LangChain message accumulator) |
+| `query` | `str` | Current user query string |
+| `user_profile` | `dict` | Long-term profile (tracked companies, interests, preferences) |
+| `collected_context` | `dict` | Subagent output (`"rag"`, `"market"`, `"web"` keys — formatted strings) |
+| `rag_agent_chunks` | `list[dict]` | Raw Qdrant hits for faithfulness check and audit |
+| `rag_invoked` | `bool` | Whether RAG subagent ran this turn |
+| `web_agent_sources` | `list[dict]` | Web search source metadata |
+| `draft_answer` | `str` | Synthesizer output before guardrails |
+| `grounded` | `bool \| None` | Faithfulness result; `None` when RAG not invoked |
+| `sources` | `list[dict]` | Top RAG hits returned in `done` event |
+| `feedback_message` | `str \| None` | Guardrail rewrite instruction for retry synthesizer call |
+| `retry_count` | `int` | Output guardrail retry counter |
+| `subagent_plan` | `dict` | Serialised `OrchestratorPlan` |
+| `subagent_results` | `list[dict]` | Serialised `SubagentResult[]` per run |
+| `direct_answer_possible` | `bool` | Planner flag: skip all data retrieval for follow-up answers |
+| `cache_hit` | `bool` | Semantic cache hit flag |
+| `input_blocked` | `bool` | Input guardrail blocked this query |
+| `input_blocked_reason` | `str \| None` | Reason for input block |
+| `output_blocked` | `bool` | Output guardrail blocked draft answer |
+| `output_blocked_reason` | `str \| None` | Reason for output block |
+| `output_rewritten` | `bool` | Guardrail replaced answer with safe fallback text |
+
+**Config (not checkpointed):**
 
 ```python
-{
+RunnableConfig["configurable"] = {
     "thread_id": str(chat_id),
     "user_id": str(user_id),
     "chat_id": str(chat_id),
@@ -699,17 +725,18 @@ Warren Buffett's Berkshire Hathaway shareholder letters (1977–2024) from [berk
 
 **Approach:** Semantic chunking — not fixed character splits.
 
-1. Split each letter into sentences.
-2. Embed adjacent sentences locally with **fastembed** (`BAAI/bge-small-en-v1.5`) — no API cost at ingest.
+1. Split each letter into sentences (abbreviation-aware tokeniser).
+2. Embed adjacent sentences locally with **fastembed** `BAAI/bge-small-en-v1.5` — no API cost at ingest.
 3. Start a new chunk when cosine similarity between consecutive sentences drops below threshold (**0.65**).
-4. Merge chunks shorter than **100 tokens**; split chunks longer than **800 tokens** at sentence boundaries.
-5. Prepend **50 overlap tokens** from the previous chunk to preserve context at boundaries.
+4. Merge chunks shorter than **100 tokens** into neighbours; split chunks longer than **800 tokens** at sentence boundaries.
+5. Prepend **50 overlap tokens** from the tail of the previous chunk. The overlap is stored separately in metadata (`overlap_prefix`) so `core_text` (without overlap) is always available. The Qdrant point stores the full `text` (with overlap) so retrieval benefits from the extra context without double-counting.
 
 | Parameter | Value | Tradeoff |
 |-----------|-------|----------|
-| Threshold 0.65 | Fewer, topic-coherent chunks | Higher threshold → better chunk quality, slightly lower recall at boundaries |
-| Overlap 50 tokens | Context preserved across splits | Storage redundancy vs retrieval quality at chunk edges |
-| Local embedder for boundaries | Free offline ingest | Boundary model differs from query-time dense embedder (acceptable — upload uses LiteLLM for stored vectors) |
+| Threshold 0.65 | Fewer, topic-coherent chunks | Higher → better quality per chunk, lower boundary recall |
+| Overlap 50 tokens | Context preserved across splits | Small storage redundancy; boundary queries return coherent passages |
+| `BAAI/bge-small-en-v1.5` for boundaries | Free offline ingest | Model differs from query-time `text-embedding-3-small`; acceptable because boundary detection only needs relative similarity, not absolute alignment with query vectors |
+| Min 100 / Max 800 tokens | Avoids micro-fragments and over-long passages | Short chunks waste Qdrant point overhead; long chunks dilute retrieval signal |
 
 ### Indexing (`scripts/upload_to_qdrant.py`)
 
@@ -725,16 +752,21 @@ Point IDs: deterministic `uuid5(namespace, "{year}:{chunk_index}")` — safe re-
 
 ### Runtime retrieval (`mcp_server/rag/tools.py`)
 
-`search_buffett_letters(query, top_k, letter_years_filter)`:
+`search_buffett_letters(query, top_k=5, letter_years_filter=None)`:
 
-1. Dense + sparse prefetch with **RRF fusion**
-2. ColBERT multivector rerank inside Qdrant
-3. Returns `letter_year`, `passage_snippet`, `similarity_score`, `qdrant_point_id`
+1. **Dense query** via LiteLLM `text-embedding-3-small` (same model as ingest — ensures embedding space alignment).
+2. **Sparse query** via fastembed BM25 tokeniser (keyword signal).
+3. **RRF fusion** merges dense + sparse prefetch candidates.
+4. **ColBERT rerank** inside Qdrant using late-interaction multivector similarity — each token in the query attends to each token in the passage.
+5. Returns per-chunk: `letter_year`, `passage_snippet`, `similarity_score`, `rerank_score`, `chunk_index`, `qdrant_point_id`.
+
+Optional `letter_years_filter` pushes a Qdrant payload filter so the model can retrieve "what did Buffett say about banks in 1990?" accurately.
 
 | Tradeoff | Choice |
 |----------|--------|
-| Latency vs quality | Hybrid + ColBERT adds ~100–300ms vs pure dense search, but significantly better passage ranking for Buffett prose |
-| Single vs multi-vector | Three vectors per point increases storage; enables state-of-art hybrid retrieval without external reranker service |
+| Latency vs quality | Hybrid + ColBERT adds ~100–300ms vs pure dense; significantly better passage ranking for Buffett's long-form prose where keyword signals (e.g. "moat", "float", "retained earnings") matter alongside semantics |
+| Three vectors per point | Increases Qdrant storage ~3×; enables state-of-art hybrid retrieval without an external reranker API or separate service |
+| No external reranker | Keeps infrastructure self-contained (Qdrant + fastembed); ColBERT at 96-dim is smaller than full Cohere Rerank but sufficient for ~50-chunk candidate sets |
 
 ### Grounding and attribution
 
@@ -750,9 +782,9 @@ Three LLM-based guardrails plus hard product rules in prompts.
 
 | Guardrail | Purpose | Mechanism | On LLM failure |
 |-----------|---------|-----------|----------------|
-| **Input** | Block off-topic queries and prompt injection | JSON classifier (`GUARDRAIL_INPUT_PROMPT`) | Fail-open by default (`FAIL_OPEN_ON_GUARDRAIL_ERROR=true`) |
-| **Output** | Block buy/sell advice, price targets, portfolio recommendations; check factual consistency vs collected context | JSON classifier; max **`OUTPUT_GUARDRAIL_MAX_RETRIES`** (default 2) → synthesizer with `feedback_message` | Fail-open pass-through |
-| **Faithfulness** | Verify RAG answers against retrieved passages | LLM compares draft vs chunks; fallback to `FAITHFULNESS_SCORE_THRESHOLD` / `FAITHFULNESS_MIN_STRONG_HITS` | Rule-based threshold fallback |
+| **Input** | Block off-topic queries and prompt injection | `gpt-4o-mini` JSON classifier (`GUARDRAIL_INPUT_PROMPT`); checks investment-research relevance and injection patterns | Fail-open by default (`FAIL_OPEN_ON_GUARDRAIL_ERROR=true`) |
+| **Output** | Block buy/sell advice, price targets, portfolio recommendations; check factual consistency vs collected context | `gpt-4o-mini` JSON classifier; violations trigger synthesizer retry with `feedback_message`; max **`OUTPUT_GUARDRAIL_MAX_RETRIES`** (default 2) retries then replaced with safe refusal text | Fail-open pass-through |
+| **Faithfulness** | Verify that RAG-grounded answers are traceable to retrieved passages | Two-tier: (1) `gpt-4o-mini` LLM evaluates claim coverage (target ≥ 70%); (2) if LLM call fails, rule-based fallback counts chunks with `similarity_score ≥ FAITHFULNESS_SCORE_THRESHOLD` (default 0.40), requires ≥ `FAITHFULNESS_MIN_STRONG_HITS` (default 2) | Rule-based fallback always available |
 
 ### Output guardrail retry loop
 
@@ -767,10 +799,13 @@ synthesizer → output_guardrail
 
 | Decision | Rationale |
 |----------|-----------|
-| Fail-open on input LLM error | Availability for reviewers; configurable to fail-closed |
-| Full draft check before streaming | Client never sees unvetted content; adds latency |
-| `grounded: false` does not block response | Transparency flag — user sees answer with honesty about unsupported RAG claims |
-| Retry synthesizer, not subagents | Faster correction; subagent data unchanged |
+| Fail-open on input LLM error | Availability for reviewers; configurable to fail-closed via `FAIL_OPEN_ON_GUARDRAIL_ERROR=false` |
+| Full draft check before streaming (pseudo-SSE) | Client never sees unvetted content; trades live token streaming for complete safety pipeline |
+| `grounded: false` does not block response | Transparency flag — user sees the answer with clear signal that RAG claims are unverified, rather than a silent refusal |
+| Retry synthesizer, not subagents | Subagent data is unchanged; only the synthesis framing violated — re-running subagents would be wasteful and non-deterministic |
+| Two-tier faithfulness (LLM + rule fallback) | LLM evaluation is more accurate but can fail; rule-based fallback prevents a broken guardrail LLM from silently making every answer appear grounded |
+| Safe refusal text on retry exhaustion | After `OUTPUT_GUARDRAIL_MAX_RETRIES` failed rewrites, the synthesizer has proven unable to produce a safe answer from this context — replacing with a static redirect is safer than looping indefinitely |
+| Separate `guardrail_logs` table | Every guardrail decision is auditable regardless of whether the message was persisted; required for compliance debugging |
 
 All evaluations logged to `guardrail_logs` with `guardrail_type`, `result`, `confidence`, `blocked_reason`.
 
@@ -871,17 +906,72 @@ Unit and integration tests use dependency overrides and mocks — no live Postgr
 
 ## Key design decisions
 
-| Decision | Why |
-|----------|-----|
-| **LiteLLM gateway only** | Assignment requires provider-agnostic calls; Zimran virtual key works out of the box |
-| **Two-process architecture** | MCP isolates blocking yfinance calls; same tools available to Cursor and LangGraph |
-| **Pseudo-SSE streaming** | Full guardrail pipeline completes before client sees any text |
-| **Planner + parallel subagents** | Structured plan → focused ReAct loops vs one overloaded orchestrator |
-| **MCP tag filtering** | Agent never sees UI tools or tools that trigger safety violations |
-| **Server-side models only** | No client model override — consistent cost and behavior |
-| **Deterministic Qdrant IDs** | Idempotent re-ingestion without duplicate points |
-| **Config vs state separation** | Checkpoint serialization stays stable; session IDs in `RunnableConfig` |
-| **Fail-open guardrails (default)** | Reviewer-friendly availability; tunable via env |
+### 1. Provider-agnostic LLM layer (LiteLLM gateway only)
+
+All LLM calls go through the Zimran LiteLLM gateway. No OpenAI, Anthropic, or Google SDK is imported directly — only `langchain_openai.ChatOpenAI` pointed at `LITELLM_BASE_URL` with a virtual key. This satisfies the assignment's hard requirement and means swapping models is a single env-var change. The tradeoff: debugging requires knowing which model slug is active; provider-specific features (e.g., Anthropic tool use API) are unavailable unless the gateway supports them.
+
+### 2. Two-process architecture (FastAPI + MCP server)
+
+MCP runs as a separate process (`mcp_server/`) connected to the API via streamable-HTTP SSE. Reasons:
+
+- **Import isolation**: `app/` never imports `mcp_server/`. This is enforced at runtime and prevents FastAPI's async event loop from being contaminated by yfinance's blocking network I/O.
+- **Dual transport**: The same MCP server runs `stdio` for Cursor/Claude Code and `streamable-http` for LangGraph — one codebase serves both IDE users and the agent.
+- **Independent scaling**: MCP can be restarted without cycling the API (e.g., to refresh fastembed model cache).
+
+Tradeoff: adds a network hop between FastAPI and tools; adds an extra healthcheck dependency.
+
+### 3. Planner → parallel subagents → synthesizer (not one ReAct agent)
+
+A single ReAct loop interleaving RAG, market, and web tool calls would produce unpredictable tool selection, sequential blocking calls, and a prompt that grows with every tool result. The planner pattern solves three problems:
+
+- **Parallelism**: `asyncio.gather` runs all three subagents simultaneously — a query needing RAG + market data finishes in `max(rag_time, market_time)` not `rag_time + market_time`.
+- **Focused context**: Each subagent sees only its relevant tools and a targeted sub-query, reducing hallucination from irrelevant context.
+- **Structured routing**: `OrchestratorPlan` uses `with_structured_output()` so the planner always returns a valid JSON schema — no regex parsing, no partial-JSON failures.
+
+Tradeoff: the planner's routing decision is opaque to the user; a wrong plan means wrong data even if individual subagents succeed.
+
+### 4. Pseudo-SSE streaming (full pipeline before first token)
+
+The graph runs to completion — including all guardrails — before any text is streamed to the client. The approved `draft_answer` is then emitted as token-sized SSE events. The alternative (streaming LLM tokens through the guardrail in real-time) would require buffering the full output anyway to run the output and faithfulness checks, making true streaming illusory unless the guardrails were weakened to per-sentence checks.
+
+Tradeoff: first-token latency is higher than a naive streaming endpoint; reported `done` event contains all metadata including `grounded` and `sources`.
+
+### 5. Semantic cache at similarity threshold 0.92
+
+Before the graph runs, the query embedding is compared against all cached query embeddings in `semantic_cache` (pgvector cosine). A hit at ≥ 0.92 returns the cached answer directly, skipping all LLM calls. The very high threshold is intentional: at a lower threshold, semantically different questions ("what is Apple's P/E?") could match ("how high is Apple's P/E ratio?") and return stale data. Investment research queries are sensitive to small phrasing differences.
+
+Tradeoff: cache hit rate is low for diverse query sets; cache value is highest for repeated or near-identical research sessions.
+
+### 6. MCP tool allowlist with tag filtering
+
+Each subagent receives exactly the tools it needs via `app/modules/agents/mcp/allowlists.py`. The `"ui"` tag is always excluded from agent-facing registrations — UI tools return `PrefabApp` objects that LLMs cannot meaningfully reason about. The market allowlist is also filtered by `data_type` so the market subagent does not see income statement tools when the orchestrator only asked for stock price.
+
+Tradeoff: restricting tools can prevent creative multi-step reasoning; in practice Buffett-lens research maps cleanly onto the three categories.
+
+### 7. `RunnableConfig` for session identifiers (not graph state)
+
+`thread_id`, `user_id`, `chat_id`, and `human_message_id` are passed in `RunnableConfig["configurable"]`, not `ZimShireState`. This keeps checkpoint serialisation stable: adding a new session field doesn't corrupt existing checkpoints. It also prevents session IDs from being accidentally included in `add_messages` or other state reducers.
+
+### 8. `grounded: null` vs `false` distinction
+
+`grounded` has three values: `true` (RAG ran and claims are supported), `false` (RAG ran but claims are not supported), `null` (RAG was not invoked). This three-value signal lets clients and the audit trail distinguish between "RAG was unnecessary for this query" and "RAG ran but the synthesizer hallucinated". A binary true/false would conflate the latter two cases.
+
+### 9. Deterministic Qdrant point IDs (`uuid5`)
+
+Point IDs are `uuid5(NAMESPACE, f"{year}:{chunk_index}")`. Re-running `upload_to_qdrant.py` on the same corpus produces identical IDs and triggers Qdrant upsert rather than creating duplicates. This is essential for offline re-ingestion after letter text cleaning changes.
+
+### 10. Per-role model assignment
+
+| Role | Model | Rationale |
+|------|-------|-----------|
+| Orchestrator / synthesizer | `claude-sonnet-4-6` | Highest quality reasoning for plan generation and final answer synthesis |
+| Subagents (RAG / market / web) | `claude-haiku-4-5` | Fast, cost-effective for tool-calling ReAct loops; quality needs are lower since they produce data, not final answers |
+| Guardrails | `gpt-4o-mini` | Cross-provider to avoid feedback loops where a Claude model evaluates its own output; fast and cheap for JSON classification |
+| Memory extraction | `claude-haiku-4-5` | Light extraction task; haiku is sufficient and cheaper than sonnet |
+
+### 11. Long-term memory via LangGraph `AsyncPostgresStore`
+
+User profiles (tracked companies, interests, preferences) are stored in LangGraph's native store rather than a custom table. This co-locates memory with checkpoints, uses the same Postgres connection pool, and provides vector-search capability (`store_vectors` table) without additional infrastructure. The tradeoff is that direct SQL queries against memory data require understanding LangGraph's internal namespace scheme (`users/{user_id}/profile`).
 
 ---
 

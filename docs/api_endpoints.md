@@ -4,15 +4,21 @@
 
 This document is the **single source of truth** for the public HTTP API (**9 endpoints**). There is no `/invoke` or client-supplied `thread_id`. The client identifies sessions by `chat_id` only; LangGraph checkpointing uses `str(chat_id)` as `thread_id` internally.
 
-ZimShire exposes 9 HTTP endpoints. All LLM orchestration, guardrails, and persistence happen server-side inside the LangGraph graph. Models are configured server-side via `app/core/config.py` — clients do not pass model overrides.
+ZimShire exposes 9 public HTTP endpoints. All LLM orchestration, guardrails, and persistence happen server-side inside the LangGraph graph. Models are configured server-side via `app/core/config.py` — clients do not pass model overrides.
+
+**Additional endpoints:** 4 read-only **debug / inspect** routes under `/debug/*` are documented separately (non-public contract; no auth — dev/reviewer use only).
 
 **Base URL:** `http://localhost:8000`
 
 **Content-Type:** `application/json` for all requests and non-streaming responses; `text/event-stream` for `POST /chats/{chat_id}/messages`.
 
+**Swagger UI:** `http://localhost:8000/docs`
+
 ---
 
 ## Endpoint overview
+
+### Public (9)
 
 | # | Method | Path | Description |
 |---|--------|------|-------------|
@@ -26,11 +32,20 @@ ZimShire exposes 9 HTTP endpoints. All LLM orchestration, guardrails, and persis
 | 8 | `GET` | `/users/{user_id}/chats/{chat_id}/memory/short-term` | Inspect short-term checkpointer history |
 | 9 | `GET` | `/health` | Health check (Postgres + Qdrant + MCP) |
 
+### Debug / inspect (non-public)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/debug/semantic-cache` | List semantic cache rows |
+| `GET` | `/debug/market-data-cache` | List market data cache rows |
+| `GET` | `/debug/chats/{chat_id}/rag-retrievals` | RAG audit log for a chat |
+| `GET` | `/debug/chats/{chat_id}/guardrail-logs` | Guardrail evaluation log for a chat |
+
 ---
 
 ## `POST /users`
 
-Create a new user identity. Must be called before creating chats.
+Create a new user identity. Must be called before creating chats. Optional `name` / `surname` seed long-term memory profile.
 
 ### Request
 
@@ -39,13 +54,27 @@ POST /users
 Content-Type: application/json
 ```
 
-**Body:** empty `{}` or omitted.
+**Body:** empty `{}`, omitted body, or:
+
+```json
+{
+  "name": "Alice",
+  "surname": "Researcher"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `string \| null` | no | Optional given name |
+| `surname` | `string \| null` | no | Optional family name |
 
 ### Response `201 Created`
 
 ```json
 {
   "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "name": "Alice",
+  "surname": "Researcher",
   "created_at": "2026-05-24T10:00:00Z"
 }
 ```
@@ -74,6 +103,8 @@ GET /users/3fa85f64-5717-4562-b3fc-2c963f66afa6
 ```json
 {
   "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "name": "Alice",
+  "surname": "Researcher",
   "created_at": "2026-05-24T10:00:00Z"
 }
 ```
@@ -110,9 +141,9 @@ Content-Type: application/json
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `user_id` | `uuid` | yes | Must exist in `users` table |
-| `chat_title` | `string` | no | Human-readable label for the conversation |
+| `chat_title` | `string` | no | Human-readable label (max 200 characters) |
 
-`model` and `provider` are set server-side from `DEFAULT_CHAT_MODEL` and `DEFAULT_PROVIDER` in config (returned in response).
+Clients do **not** send `model` or `provider`. Both are set server-side from `DEFAULT_CHAT_MODEL` and `DEFAULT_PROVIDER` in config and returned in the response.
 
 ### Response `201 Created`
 
@@ -175,13 +206,19 @@ GET /chats/a1b2c3d4-0000-0000-0000-000000000001
 
 ## `GET /chats/{chat_id}/messages`
 
-Retrieve the full message history for a conversation. Used to display past turns in the UI.
+Retrieve the full message history for a conversation. Requires ownership verification via query parameter.
 
 ### Request
 
 ```http
-GET /chats/a1b2c3d4-0000-0000-0000-000000000001/messages
+GET /chats/a1b2c3d4-0000-0000-0000-000000000001/messages?user_id=3fa85f64-5717-4562-b3fc-2c963f66afa6
 ```
+
+### Query parameters
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `user_id` | `uuid` | yes | Must match the chat owner |
 
 ### Response `200 OK`
 
@@ -224,8 +261,8 @@ GET /chats/a1b2c3d4-0000-0000-0000-000000000001/messages
 |-------|------|-------------|
 | `messages[].role` | `"human" \| "assistant"` | Who sent the message |
 | `messages[].grounded` | `bool \| null` | `null` for human turns and market/web-only answers |
-| `messages[].sources` | `array` | Buffett letter citations; empty for human turns |
-| `messages[].langfuse_trace_id` | `string \| null` | Present for every assistant turn (including cache hits) |
+| `messages[].sources` | `array` | Buffett letter citations (assistant turns only; filtered to `used_in_response`) |
+| `messages[].langfuse_trace_id` | `string \| null` | Present for assistant turns |
 
 **Empty chat:** returns `{"chat_id": "...", "messages": []}` with `200`.
 
@@ -245,19 +282,19 @@ Send a research query to the ZimShire agent. Response is a **Server-Sent Events 
 
 ### Streaming flow
 
-The graph runs to completion before any tokens are sent to the client:
-
 ```
-1. input_guardrail   — validate query
-2. semantic_cache    — check for similar cached answer
-3. load_memory → orchestrator (rag_agent / market_agent / web_agent tools)
-4. output_guardrail  — full text check (ainvoke, no streaming)
-5. faithfulness_guardrail — set grounded + sources
-6. FastAPI streams approved draft_answer as SSE token events
-7. done event + persist (messages, rag_retrievals, ...)
+1. Persist human message (server-generated message_id)
+2. LangGraph astream (stream_mode: messages + values)
+3. progress events — after planner (per enabled subagent) and before synthesis
+4. token events — real LLM chunks from synthesizer node (llm.astream)
+5. output_guardrail — full draft check (+ optional retry → synthesizer runs again)
+6. faithfulness_guardrail — set grounded + sources
+7. replace event — if output guardrail rewrote text that was already streamed
+8. token fallback — cache hit or no synthesis tokens: word-chunk replay of draft_answer
+9. persist assistant turn + done event
 ```
 
-This guarantees the client only ever receives guardrail-approved content.
+**Hybrid streaming model:** synthesis tokens are delivered progressively as the LLM generates them. Output and faithfulness guardrails run **after** the synthesis stream completes inside the graph. The text persisted to Postgres and returned in `done` is always the post-guardrail final answer. If the output guardrail replaces streamed content, clients receive a `replace` event and must swap the entire displayed answer.
 
 ### Request
 
@@ -271,7 +308,6 @@ Content-Type: application/json
 ```json
 {
   "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  "chat_id": "a1b2c3d4-0000-0000-0000-000000000001",
   "query": "How would Buffett evaluate Apple's economic moat based on his letters?"
 }
 ```
@@ -279,14 +315,40 @@ Content-Type: application/json
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `user_id` | `uuid` | yes | Must match the chat owner |
-| `chat_id` | `uuid` | yes | Must match path `{chat_id}` (LangGraph `thread_id`) |
-| `query` | `string` | yes | The research question. Max 2000 characters. |
+| `query` | `string` | yes | The research question (1–2000 characters) |
 
-`message_id` for the human turn is generated server-side. LLM models are taken from server config only (no client `model` field).
+`chat_id` comes from the URL path only — do not send it in the body. Human `message_id` is generated server-side. LLM models are taken from server config only.
 
-### Response — SSE stream
+**Response headers:** `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`
 
-**Token events** (streamed after guardrails complete):
+### Response — SSE events
+
+All events use the format `data: {json}\n\n`.
+
+#### SSE event reference
+
+| `type` | When | Key fields |
+|--------|------|------------|
+| `progress` | After orchestrator plan / before synthesis | `stage`: `rag` \| `market` \| `web` \| `synthesizing`; `message` |
+| `token` | Synthesizer LLM stream, or cache-hit fallback | `content` |
+| `replace` | Output guardrail rewrote already-streamed text | `content` (full replacement text) |
+| `blocked` | Input guardrail rejected the query | `reason` |
+| `error` | Graph run failed | `detail` |
+| `done` | Always the final event | `message_id`, `grounded`, `sources`, `langfuse_trace_id`, `cache_hit` |
+
+**Client contract:** on `replace`, replace the **entire** displayed answer with `content` (do not append).
+
+#### Progress events
+
+```
+data: {"type": "progress", "stage": "rag", "message": "Searching Buffett letters…"}
+
+data: {"type": "progress", "stage": "market", "message": "Fetching market data…"}
+
+data: {"type": "progress", "stage": "synthesizing", "message": "Composing answer…"}
+```
+
+#### Token events (real LLM stream during synthesis)
 
 ```
 data: {"type": "token", "content": "Warren"}
@@ -296,7 +358,13 @@ data: {"type": "token", "content": " Buffett"}
 data: {"type": "token", "content": " consistently emphasized..."}
 ```
 
-**Done event** (always the final event):
+#### Replace event (output guardrail rewrite after stream)
+
+```
+data: {"type": "replace", "content": "ZimShire can help you research companies through Buffett's philosophy..."}
+```
+
+#### Done event (always last on success paths)
 
 ```
 data: {
@@ -311,19 +379,20 @@ data: {
       "qdrant_point_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
     }
   ],
-  "langfuse_trace_id": "trace-abc123"
+  "langfuse_trace_id": "trace-abc123",
+  "cache_hit": false
 }
 ```
 
-**Guardrail block event** (input blocked):
+#### Input blocked
 
 ```
 data: {"type": "blocked", "reason": "Query is not related to investment research or Buffett's philosophy."}
 
-data: {"type": "done", "message_id": null, "grounded": null, "sources": [], "langfuse_trace_id": "trace-xyz"}
+data: {"type": "done", "message_id": null, "grounded": null, "sources": [], "langfuse_trace_id": "trace-xyz", "cache_hit": false}
 ```
 
-**Cache hit** (semantic cache served the answer — still streamed token by token):
+#### Cache hit (no synthesizer LLM stream — fallback word-chunk tokens after graph)
 
 ```
 data: {"type": "token", "content": "Based on Buffett's 1988 letter..."}
@@ -331,26 +400,34 @@ data: {"type": "token", "content": "Based on Buffett's 1988 letter..."}
 data: {"type": "done", "message_id": "uuid", "grounded": true, "sources": [...], "cache_hit": true, "langfuse_trace_id": "trace-abc"}
 ```
 
-Note: `langfuse_trace_id` is always populated — even on cache hits a minimal Langfuse trace is created (one span `cache_hit`, no LLM cost).
+#### Graph error
+
+```
+data: {"type": "error", "detail": "orchestrator planner failed: ..."}
+
+data: {"type": "done", "message_id": null, "grounded": null, "sources": [], "langfuse_trace_id": "trace-err", "cache_hit": false}
+```
+
+Note: `langfuse_trace_id` is always populated on terminal `done` events — including cache hits, blocks, and errors.
 
 ### `done` event fields
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `type` | `"done"` | Always `"done"` |
-| `message_id` | `uuid \| null` | Persisted assistant message id; `null` if input was blocked |
+| `message_id` | `uuid \| null` | Persisted assistant message id; `null` if input blocked or graph error before persist |
 | `grounded` | `bool \| null` | `true` — grounded in Buffett letters; `false` — RAG ran but passages did not support claims; `null` — RAG not used |
 | `sources` | `array` | Buffett letter citations (used passages). Empty if `grounded` is `false` or `null` |
-| `langfuse_trace_id` | `string` | Langfuse trace for this request. Always present (minimal trace on cache hit or block) |
-| `cache_hit` | `bool` | Present and `true` only when semantic cache served the answer |
+| `langfuse_trace_id` | `string \| null` | Langfuse trace for this request |
+| `cache_hit` | `bool` | `true` when semantic cache served the answer; `false` otherwise |
 
 ### `grounded` field semantics
 
 | Value | Meaning |
 |-------|---------|
 | `true` | RAG ran; retrieved passages support the answer; `sources` is populated |
-| `false` | RAG ran but passages did not support claims; answer may contain a refusal note |
-| `null` | RAG was not used (market-only or web-only answer) |
+| `false` | RAG ran but passages did not support claims |
+| `null` | RAG was not used (market-only, web-only, or cache hit without letter sources) |
 
 ### Multi-turn behaviour
 
@@ -359,18 +436,19 @@ The `chat_id` identifies the session. LangGraph restores the full conversation f
 ```json
 // Turn 1
 POST /chats/abc123/messages
-{ "content": "How would Buffett view Apple's moat?" }
+{ "user_id": "...", "query": "How would Buffett view Apple's moat?" }
 
 // Turn 2 — same chat_id, graph sees full history
 POST /chats/abc123/messages
-{ "content": "Now compare that to what he said about banks in 1990." }
+{ "user_id": "...", "query": "Now compare that to what he said about banks in 1990." }
 ```
 
 ### Status codes
 
 | Code | Meaning |
 |------|---------|
-| `200` | Stream started. Guardrail blocks are delivered inside the stream as `blocked` events. |
+| `200` | Stream started. Guardrail blocks and errors are delivered inside the stream. |
+| `403` | `user_id` does not own the chat |
 | `404` | `chat_id` not found |
 | `422` | Request body validation failed |
 | `500` | Internal error before stream could start (e.g. Postgres unreachable) |
@@ -380,7 +458,7 @@ POST /chats/abc123/messages
 ```bash
 curl -N -X POST http://localhost:8000/chats/a1b2c3d4-0000-0000-0000-000000000001/messages \
   -H "Content-Type: application/json" \
-  -d '{"content": "How would Buffett evaluate Apple'\''s moat based on his letters?"}'
+  -d '{"user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "query": "How would Buffett evaluate Apple'\''s moat based on his letters?"}'
 ```
 
 ### Python example (httpx)
@@ -388,17 +466,24 @@ curl -N -X POST http://localhost:8000/chats/a1b2c3d4-0000-0000-0000-000000000001
 ```python
 import httpx, json
 
+USER_ID = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+CHAT_ID = "a1b2c3d4-0000-0000-0000-000000000001"
+
 async with httpx.AsyncClient(timeout=120) as client:
     async with client.stream(
         "POST",
-        "http://localhost:8000/chats/a1b2c3d4-0000-0000-0000-000000000001/messages",
-        json={"content": "How would Buffett evaluate Apple's moat?"},
+        f"http://localhost:8000/chats/{CHAT_ID}/messages",
+        json={"user_id": USER_ID, "query": "How would Buffett evaluate Apple's moat?"},
     ) as response:
         async for line in response.aiter_lines():
             if line.startswith("data: "):
                 event = json.loads(line[6:])
-                if event["type"] == "token":
+                if event["type"] == "progress":
+                    print(f"[{event['stage']}] {event['message']}")
+                elif event["type"] == "token":
                     print(event["content"], end="", flush=True)
+                elif event["type"] == "replace":
+                    print("\n--- replaced ---\n" + event["content"])
                 elif event["type"] == "done":
                     print()
                     print(f"grounded={event['grounded']}")
@@ -415,7 +500,7 @@ Inspect long-term memory for a user (LangGraph `AsyncPostgresStore`).
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `query` | `string` | `""` | Optional search string for semantic store lookup |
+| `query` | `string` | `""` | Optional search string for semantic store lookup (max 500 characters) |
 
 ### Response `200 OK`
 
@@ -510,9 +595,90 @@ GET /health
 
 ---
 
+## Debug / inspect endpoints (non-public)
+
+Read-only views for development and reviewer debugging. **Not part of the 9-endpoint public contract.** No authentication — do not expose in production without a gateway.
+
+### `GET /debug/semantic-cache`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | `int` | `50` | Max rows (1–500) |
+
+**Response `200 OK`:** array of:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `uuid` | Row id |
+| `original_query` | `string` | Cached query text |
+| `hit_count` | `int` | Times served |
+| `expires_at` | `datetime \| null` | TTL expiry |
+
+### `GET /debug/market-data-cache`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | `int` | `100` | Max rows (1–500) |
+
+**Response `200 OK`:** array of:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `uuid` | Row id |
+| `ticker` | `string` | Stock symbol |
+| `data_type` | `string` | Cache key type |
+| `fetched_at` | `datetime` | When fetched |
+| `expires_at` | `datetime` | TTL expiry |
+
+### `GET /debug/chats/{chat_id}/rag-retrievals`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | `int` | `200` | Max rows (1–1000) |
+
+**Response `200 OK`:** array of:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `uuid` | Row id |
+| `message_id` | `uuid` | Assistant message |
+| `letter_year` | `int \| null` | Buffett letter year |
+| `passage_snippet` | `string \| null` | Excerpt |
+| `similarity_score` | `float \| null` | Retrieval score |
+| `used_in_response` | `bool \| null` | Cited in final answer |
+| `created_at` | `datetime` | Log timestamp |
+
+### `GET /debug/chats/{chat_id}/guardrail-logs`
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `limit` | `int` | `200` | Max rows (1–1000) |
+
+**Response `200 OK`:** array of:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `uuid` | Row id |
+| `message_id` | `uuid` | Human message id |
+| `guardrail_type` | `string` | `input` \| `output` \| `faithfulness` |
+| `result` | `string` | `passed` \| `blocked` |
+| `confidence` | `float \| null` | Classifier confidence |
+| `blocked_reason` | `string \| null` | Reason when blocked |
+| `checked_at` | `datetime` | Evaluation timestamp |
+
+---
+
 ## Streaming model
 
-`POST /chats/{chat_id}/messages` returns **pseudo-SSE**: the graph runs to completion (guardrails, orchestrator, faithfulness), then the final answer is emitted as SSE events. This is not token-by-token LLM streaming; it trades live tokens for full-pipeline safety checks.
+`POST /chats/{chat_id}/messages` uses **hybrid SSE streaming**:
+
+- **Progress events** during research (subagent plan and pre-synthesis).
+- **Real LLM token events** during the `synthesizer` node (`llm.astream`, forwarded via LangGraph `stream_mode="messages"`).
+- **Guardrails after synthesis** — output and faithfulness checks run on the complete draft inside the graph before persist.
+- **`replace` event** when the output guardrail rewrites content that was already streamed to the client.
+- **Fallback chunking** on semantic cache hits (no synthesizer LLM call) — approved cached text emitted as word-chunk `token` events after the graph completes.
+
+**Tradeoff (Task 1 vs Task 6):** progressive token delivery satisfies the assignment streaming requirement; the persisted assistant message and `done` payload always reflect post-guardrail text. Clients must handle `replace` to stay consistent with the database.
 
 ---
 
@@ -520,7 +686,7 @@ GET /health
 
 ```json
 {
-  "detail": "chat_id not found"
+  "detail": "chat not found"
 }
 ```
 
@@ -530,51 +696,55 @@ GET /health
 
 ```mermaid
 flowchart TD
-    A["POST /chats/chat_id/messages\nuser_id, chat_id, query"]
-    B[input_guardrail]
-    C{semantic_cache}
-    D[load_memory\nST + LT context]
-    E["orchestrator\nReAct + subagent tools"]
-    F[output_guardrail]
-    G[faithfulness_guardrail]
-    H["FastAPI: stream approved text\nas SSE token events"]
-    I["persist + done event"]
+    postMsg["POST /chats/chat_id/messages\nuser_id + query"]
+    inputG[input_guardrail]
+    cache{semantic_cache_check}
+    mem[load_memory]
+    plan[orchestrator_planner]
+    sub[run_subagents]
+    synth[synthesizer_astream]
+    client[SSE_token_to_client]
+    outG[output_guardrail]
+    faith[faithfulness_guardrail]
+    persist[persist_and_done]
 
-    A --> B
-    B -->|blocked| H
-    B -->|pass| C
-    C -->|hit| H
-    C -->|miss| D
-    D --> E
-    E --> F
-    F --> G
-    G --> H
-    H --> I
+    postMsg --> inputG
+    inputG -->|blocked| persist
+    inputG --> cache
+    cache -->|hit| persist
+    cache -->|miss| mem
+    mem --> plan
+    plan --> sub
+    sub --> synth
+    synth -->|SSE_token| client
+    synth --> outG
+    outG -->|retry| synth
+    outG --> faith
+    faith --> persist
 ```
 
-### Node → data source mapping
+### Node to data source mapping
 
 | Node | LLM call | Data source |
 |------|----------|-------------|
 | `input_guardrail` | classifier (LiteLLM) | `guardrail_logs` write |
 | `semantic_cache_check` | embed (LiteLLM) | `semantic_cache` R/W |
 | `load_memory` | — | checkpointer `messages`; `store.asearch` |
-| `orchestrator` | `ainvoke` + tool loop (LiteLLM) | subagent tools → MCP |
-| `rag_agent` (tool) | embed (inside MCP) | `search_buffett_letters` → Qdrant |
-| `market_agent` (tool) | — | `market_data_cache` R/W; MCP on miss |
-| `web_agent` (tool) | — | `web_search` → DuckDuckGo |
-| `output_guardrail` | classifier (LiteLLM) | `guardrail_logs` write |
-| `faithfulness_guardrail` | rule-based or LLM | `guardrail_logs` write |
-| FastAPI persist | — | `messages`, `rag_retrievals`, `semantic_cache` write |
+| `orchestrator` | structured output plan (LiteLLM) | no tools — selects subagents |
+| `run_subagents` | ReAct per subagent (LiteLLM) | MCP tools (tag-filtered) |
+| `synthesizer` | `astream` (LiteLLM) | `collected_context` + profile + history |
+| `output_guardrail` | classifier (LiteLLM) | `guardrail_logs` write; may retry synthesizer |
+| `faithfulness_guardrail` | classifier or threshold fallback | `guardrail_logs` write; sets `grounded` + `sources` |
+| FastAPI persist | — | `messages`, `rag_retrievals`, `semantic_cache`, long-term memory |
 
-### MCP server tools
+Subagents inside `run_subagents`:
 
-The MCP server runs as a separate process and exposes three data tools:
+| Subagent | MCP tools (examples) | Data source |
+|----------|---------------------|-------------|
+| `rag` | `search_buffett_letters` | Qdrant `buffett_letters` |
+| `market` | `lookup_ticker`, `get_stock_info`, financials, etc. | `market_data_cache` R/W; yfinance via MCP on miss |
+| `web` | `web_search`, `web_search_news`, `web_search_knowledge` | DuckDuckGo via SerpApi |
 
-| Tool | Called by | Data source |
-|------|-----------|-------------|
-| `search_buffett_letters(query, top_k)` | `rag_agent` | Qdrant `buffett_letters` |
-| `get_market_data(ticker, data_type)` | `market_agent` on cache miss | yfinance (blocking call safe in MCP process) |
-| `web_search(query, max_results)` | `web_agent` | DuckDuckGo |
+Full MCP tool reference: [mcp_tools_reference.md](mcp_tools_reference.md). LangGraph subagent allowlist: `app/modules/agents/mcp/allowlists.py`.
 
-The LangGraph graph connects to the MCP server via **SSE transport** (`http://localhost:8001`) — concurrent-safe for multiple simultaneous FastAPI requests.
+The LangGraph graph connects to the MCP server via **streamable-http / SSE transport** (`http://localhost:8001`) — concurrent-safe for multiple simultaneous FastAPI requests.
