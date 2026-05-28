@@ -39,22 +39,24 @@ def make_callback_handler(
 ):
     """Return a LangChain CallbackHandler for the current request.
 
-    Passes user_id / session_id directly so Langfuse links the trace to the
-    correct user and chat without a separate propagate_attributes context.
+    In Langfuse v4, user/session metadata is passed via TraceContext on the
+    handler constructor. The same metadata is also set in config["metadata"]
+    by the caller (belt-and-suspenders for LangGraph compatibility).
     Returns None if Langfuse is not configured.
     """
     if not _check_available():
         return None
     try:
         from langfuse.langchain import CallbackHandler
-        kwargs: dict = {}
+        from langfuse.types import TraceContext
+        tc: TraceContext = {}
         if user_id:
-            kwargs["user_id"] = user_id
+            tc["user_id"] = user_id
         if session_id:
-            kwargs["session_id"] = session_id
+            tc["session_id"] = session_id
         if trace_name:
-            kwargs["trace_name"] = trace_name
-        return CallbackHandler(**kwargs)
+            tc["trace_name"] = trace_name
+        return CallbackHandler(trace_context=tc if tc else None)
     except Exception as exc:
         logger.warning("Langfuse CallbackHandler creation failed: %s", exc)
         return None

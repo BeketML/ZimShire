@@ -68,6 +68,10 @@ class TurnOrchestrationService:
                 "query": query,
             },
             "callbacks": [handler] if handler is not None else [],
+            "metadata": {
+                "langfuse_user_id": str(user_id),
+                "langfuse_session_id": str(chat_id),
+            },
         }
         inputs = {"messages": [HumanMessage(content=query)], "query": query}
 
