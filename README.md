@@ -6,6 +6,14 @@
 
 ---
 
+## UI
+
+![ZimShire — empty state with starter prompts](docs/ui_screenshot.png)
+
+*Empty state: sidebar, starter prompt chips, health indicator. Dark navy + gold + JetBrains Mono aesthetic.*
+
+---
+
 ## Assignment coverage
 
 | Task | Requirement | Implementation |
