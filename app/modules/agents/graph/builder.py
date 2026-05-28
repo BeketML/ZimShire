@@ -38,20 +38,17 @@ from app.modules.agents.pipeline import (
     semantic_cache_check,
     synthesizer,
 )
-from app.modules.agents.runtime.observability import wrap_node
-
-
 def build_graph(checkpointer: BaseCheckpointSaver, store: BaseStore):
     builder = StateGraph(ZimShireState)
 
-    builder.add_node("input_guardrail", wrap_node(input_guardrail, "input_guardrail"))
-    builder.add_node("semantic_cache_check", wrap_node(semantic_cache_check, "semantic_cache_check"))
-    builder.add_node("load_memory", wrap_node(partial(load_memory, store=store), "load_memory"))
-    builder.add_node("orchestrator", wrap_node(orchestrator, "orchestrator"))
-    builder.add_node("run_subagents", wrap_node(run_subagents, "run_subagents"))
-    builder.add_node("synthesizer", wrap_node(synthesizer, "synthesizer"))
-    builder.add_node("output_guardrail", wrap_node(output_guardrail, "output_guardrail"))
-    builder.add_node("faithfulness_guardrail", wrap_node(faithfulness_guardrail, "faithfulness_guardrail"))
+    builder.add_node("input_guardrail", input_guardrail)
+    builder.add_node("semantic_cache_check", semantic_cache_check)
+    builder.add_node("load_memory", partial(load_memory, store=store))
+    builder.add_node("orchestrator", orchestrator)
+    builder.add_node("run_subagents", run_subagents)
+    builder.add_node("synthesizer", synthesizer)
+    builder.add_node("output_guardrail", output_guardrail)
+    builder.add_node("faithfulness_guardrail", faithfulness_guardrail)
 
     builder.add_edge(START, "input_guardrail")
     builder.add_conditional_edges(

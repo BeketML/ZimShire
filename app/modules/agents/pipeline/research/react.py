@@ -10,7 +10,6 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from langgraph.prebuilt import create_react_agent
 
-from app.services.langfuse_service import log_react_tool_messages
 from app.services.llm import get_subagent_model
 
 logger = logging.getLogger(__name__)
@@ -112,7 +111,6 @@ async def run_react_subagent(
             config=config,
         )
         messages = result.get("messages", [])
-        log_react_tool_messages(messages)
         artifacts = extract_artifacts(agent, messages)
         last = messages[-1] if messages else None
         if isinstance(last, AIMessage):

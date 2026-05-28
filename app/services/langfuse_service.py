@@ -100,59 +100,6 @@ def sanitize_state(state: dict) -> dict:
     return out
 
 
-def observe_graph_state(node_name: str, state: dict) -> None:
-    """Emit a Langfuse score/event capturing state after a node runs."""
-    if not _check_available():
-        return
-    try:
-        from langfuse import get_client
-        client = get_client()
-        payload = sanitize_state(state)
-        client.create_event(
-            name=f"node:{node_name}",
-            input=payload,
-        )
-    except Exception as exc:
-        logger.debug("observe_graph_state(%s) failed: %s", node_name, exc)
-
-
-def observe_tool_call(name: str, input_data, output_data) -> None:
-    """Emit a Langfuse event for a single MCP tool call."""
-    if not _check_available():
-        return
-    try:
-        from langfuse import get_client
-        client = get_client()
-        client.create_event(
-            name=f"tool:{name}",
-            input=input_data,
-            output=str(output_data)[:1000] if output_data is not None else None,
-        )
-    except Exception as exc:
-        logger.debug("observe_tool_call(%s) failed: %s", name, exc)
-
-
-def log_react_tool_messages(messages: list) -> None:
-    """Log AIMessage tool calls + matching ToolMessages as Langfuse events."""
-    if not _check_available():
-        return
-    try:
-        from langchain_core.messages import AIMessage, ToolMessage
-        tool_outputs: dict[str, str] = {}
-        for msg in messages:
-            if isinstance(msg, ToolMessage):
-                tool_outputs[msg.tool_call_id] = (
-                    msg.content[:500] if isinstance(msg.content, str) else str(msg.content)[:500]
-                )
-        for msg in messages:
-            if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-                for call in msg.tool_calls:
-                    output = tool_outputs.get(call.get("id", ""))
-                    observe_tool_call(call.get("name", "unknown"), call.get("args"), output)
-    except Exception as exc:
-        logger.debug("log_react_tool_messages failed: %s", exc)
-
-
 # Keep for backward compat (called by guardrail nodes)
 def new_trace(
     *,
