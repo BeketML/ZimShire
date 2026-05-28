@@ -6,6 +6,7 @@ import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from app.core.config import settings
 from app.core.exceptions import AgentPlanError
 from app.core.prompts import ORCHESTRATOR_PLANNER_PROMPT
 from app.modules.agents.graph.schemas import OrchestratorPlan
@@ -23,7 +24,7 @@ def _build_planner_user_message(state: ZimShireState) -> str:
     companies = ", ".join(profile.get("tracked_companies", [])) or "(none)"
     interests = ", ".join(profile.get("research_interests", [])) or "(none)"
     history_text = _short_term_svc.format_recent_turns(
-        state.get("messages", []), limit_turn_pairs=5
+        state.get("messages", []), limit_turn_pairs=settings.short_term_turn_pairs
     )
     query = state.get("query") or ""
 
@@ -32,7 +33,7 @@ def _build_planner_user_message(state: ZimShireState) -> str:
         f"USER PROFILE:\n"
         f"- Tracked companies: {companies}\n"
         f"- Research interests: {interests}\n\n"
-        f"RECENT CONVERSATION (last 5 turns):\n{history_text}"
+        f"RECENT CONVERSATION (last {settings.short_term_turn_pairs} turns):\n{history_text}"
     )
 
 

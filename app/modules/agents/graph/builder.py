@@ -10,7 +10,7 @@ Topology:
   orchestrator → run_subagents
   run_subagents → synthesizer
   synthesizer → output_guardrail
-  output_guardrail →[retry, retry_count < 3]→ synthesizer
+  output_guardrail →[retry, retry_count < max_retries]→ synthesizer
   output_guardrail →[proceed]→ faithfulness_guardrail
   faithfulness_guardrail → END
 """

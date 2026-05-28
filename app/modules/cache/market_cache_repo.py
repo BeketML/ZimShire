@@ -8,9 +8,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from app.core.config import settings
 from app.models.models import MarketDataCache
-
-MARKET_DEFAULT_TTL = timedelta(hours=1)
 
 
 async def get_valid_market(
@@ -33,8 +32,10 @@ async def upsert_market(
     ticker: str,
     data_type: str,
     payload: dict[str, Any],
-    ttl: timedelta = MARKET_DEFAULT_TTL,
+    ttl: timedelta | None = None,
 ) -> None:
+    if ttl is None:
+        ttl = settings.market_cache_ttl
     expires = datetime.now(timezone.utc) + ttl
     stmt = (
         pg_insert(MarketDataCache)

@@ -25,6 +25,14 @@ class ConfigProvider(Protocol):
     langfuse_public_key: str
     langfuse_secret_key: str
     langfuse_base_url: str
+    fail_open_on_guardrail_error: bool
+    semantic_similarity_threshold: float
+    semantic_cache_ttl_days: int
+    market_cache_ttl_hours: int
+    faithfulness_score_threshold: float
+    faithfulness_min_strong_hits: int
+    output_guardrail_max_retries: int
+    short_term_turn_pairs: int
 
 
 @runtime_checkable

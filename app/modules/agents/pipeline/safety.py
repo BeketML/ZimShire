@@ -16,9 +16,6 @@ from app.services.llm import get_guardrail_model
 
 logger = logging.getLogger(__name__)
 
-FAITHFULNESS_SCORE_THRESHOLD = 0.40
-FAITHFULNESS_MIN_STRONG_HITS = 2
-
 
 def _message_id(config: RunnableConfig) -> UUID | None:
     raw = config.get("configurable", {}).get("human_message_id")
@@ -78,7 +75,7 @@ async def output_guardrail(state: ZimShireState, config: RunnableConfig) -> dict
         message_id=mid, guardrail_type="output", result="blocked", blocked_reason=reason
     )
 
-    if retry_count < 2:
+    if retry_count < settings.output_guardrail_max_retries:
         return {
             "output_blocked": True,
             "output_blocked_reason": reason,
@@ -145,8 +142,11 @@ async def faithfulness_guardrail(state: ZimShireState, config: RunnableConfig) -
         score = float(result.get("score", 1.0))
     except Exception as exc:
         logger.warning("faithfulness_guardrail LLM call failed (%s) — falling back to threshold check", exc)
-        strong = [c for c in chunks if (c.get("similarity_score") or 0.0) >= FAITHFULNESS_SCORE_THRESHOLD]
-        grounded = len(strong) >= FAITHFULNESS_MIN_STRONG_HITS
+        strong = [
+            c for c in chunks
+            if (c.get("similarity_score") or 0.0) >= settings.faithfulness_score_threshold
+        ]
+        grounded = len(strong) >= settings.faithfulness_min_strong_hits
         score = len(strong) / len(chunks) if chunks else 0.0
 
     strong_hits = sorted(chunks, key=lambda c: c.get("similarity_score") or 0.0, reverse=True)
@@ -158,7 +158,7 @@ async def faithfulness_guardrail(state: ZimShireState, config: RunnableConfig) -
             "qdrant_point_id": str(c.get("qdrant_point_id", "")),
         }
         for c in strong_hits
-        if (c.get("similarity_score") or 0.0) >= FAITHFULNESS_SCORE_THRESHOLD
+        if (c.get("similarity_score") or 0.0) >= settings.faithfulness_score_threshold
     ][:5]
 
     await write_guardrail_log(

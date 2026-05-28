@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.models import Message
 from app.modules.cache.gateways import write_semantic
 from app.modules.chat_history.long_term.service import LongTermMemoryService
@@ -57,7 +57,7 @@ async def handle_write_semantic_cache(cmd: WriteSemanticCacheCommand) -> None:
             original_query=cmd.query,
             cached_response=cmd.response,
             sources=list(cmd.sources) if cmd.sources else None,
-            ttl=timedelta(days=7),
+            ttl=settings.semantic_cache_ttl,
         )
     except Exception as exc:
         logger.warning("semantic_cache insert failed: %s", exc)

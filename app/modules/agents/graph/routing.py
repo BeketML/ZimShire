@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.config import settings
 from app.modules.agents.graph.state import ZimShireState
 
 
@@ -12,6 +13,6 @@ def route_after_cache(state: ZimShireState) -> str:
 
 
 def route_after_output_guardrail(state: ZimShireState) -> str:
-    if state.get("output_blocked") and state.get("retry_count", 0) < 3:
+    if state.get("output_blocked") and state.get("retry_count", 0) < settings.output_guardrail_max_retries:
         return "retry"
     return "proceed"

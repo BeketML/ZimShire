@@ -1,4 +1,4 @@
-"""Semantic cache repository — pgvector cosine similarity, TTL 7 days."""
+"""Semantic cache repository — pgvector cosine similarity."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -7,9 +7,8 @@ from sqlalchemy import bindparam, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from app.core.config import settings
 from app.models.models import SemanticCache
-
-SEMANTIC_SIMILARITY_THRESHOLD = 0.92
 
 
 async def find_similar(
@@ -28,7 +27,7 @@ async def find_similar(
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
     res = await session.execute(stmt, {"embedding": embedding_str})
     row = res.first()
-    if row is None or float(row.similarity) < SEMANTIC_SIMILARITY_THRESHOLD:
+    if row is None or float(row.similarity) < settings.semantic_similarity_threshold:
         return None
     cache_row = await session.scalar(select(SemanticCache).where(SemanticCache.id == row.id))
     if cache_row is None:
@@ -60,8 +59,10 @@ async def insert_semantic(
     original_query: str,
     cached_response: str,
     sources: list[dict] | None,
-    ttl: timedelta | None = timedelta(days=7),
+    ttl: timedelta | None = None,
 ) -> None:
+    if ttl is None:
+        ttl = settings.semantic_cache_ttl
     expires = datetime.now(timezone.utc) + ttl if ttl else None
     row = SemanticCache(
         query_embedding=embedding,

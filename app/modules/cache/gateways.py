@@ -5,6 +5,7 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.modules.cache import repository
 
@@ -52,8 +53,10 @@ async def write_semantic(
     original_query: str,
     cached_response: str,
     sources: list[dict] | None,
-    ttl: timedelta | None = timedelta(days=7),
+    ttl: timedelta | None = None,
 ) -> None:
+    if ttl is None:
+        ttl = settings.semantic_cache_ttl
     try:
         async with AsyncSessionLocal() as session:
             await repository.insert_semantic(
