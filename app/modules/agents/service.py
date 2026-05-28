@@ -4,8 +4,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.core.config import settings
-
 logger = logging.getLogger(__name__)
 
 _state: dict[str, Any] = {
@@ -24,14 +22,14 @@ def _to_psycopg_dsn(url: str) -> str:
     return url
 
 
-async def init_graph() -> None:
+async def init_graph(database_url: str) -> None:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from langgraph.store.postgres.aio import AsyncPostgresStore
 
     from app.modules.agents.builder import build_graph
     from app.services.embedding import embed_text
 
-    dsn = _to_psycopg_dsn(settings.database_url)
+    dsn = _to_psycopg_dsn(database_url)
 
     cm_checkpointer = AsyncPostgresSaver.from_conn_string(dsn)
     checkpointer = await cm_checkpointer.__aenter__()

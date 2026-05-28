@@ -4,7 +4,6 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.exceptions import NotFoundError
 from app.models.models import Chat
 from app.modules.chats import repository
@@ -16,6 +15,8 @@ async def create_chat(
     *,
     user_id: UUID,
     chat_title: str | None,
+    model: str,
+    provider: str,
 ) -> Chat:
     user = await user_repo.get_user(session, user_id)
     if user is None:
@@ -24,8 +25,8 @@ async def create_chat(
         session,
         user_id=user_id,
         chat_title=chat_title,
-        model=settings.default_chat_model,
-        provider=settings.default_provider,
+        model=model,
+        provider=provider,
     )
     await session.commit()
     return chat

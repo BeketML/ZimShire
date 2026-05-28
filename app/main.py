@@ -36,7 +36,7 @@ from app.modules.inspect.router import router as inspect_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_mcp_client(base_url=settings.mcp_base_url)
-    await init_graph()
+    await init_graph(database_url=settings.database_url)
     yield
     await close_graph()
     await close_mcp_client()
