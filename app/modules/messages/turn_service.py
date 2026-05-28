@@ -16,7 +16,6 @@ from app.services.langfuse_service import (
     flush as langfuse_flush,
     get_trace_id,
     make_callback_handler,
-    trace_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,7 +54,11 @@ class TurnOrchestrationService:
             await session.commit()
             human_message_id = human.message_id
 
-        handler = make_callback_handler()
+        handler = make_callback_handler(
+            user_id=str(user_id),
+            session_id=str(chat_id),
+            trace_name="zimshire_turn",
+        )
         config = {
             "configurable": {
                 "thread_id": str(chat_id),
@@ -70,9 +73,8 @@ class TurnOrchestrationService:
 
         final_state: dict = {}
         try:
-            with trace_context(user_id=str(user_id), session_id=str(chat_id)):
-                async for chunk in self._graph.astream(inputs, config=config, stream_mode="values"):
-                    final_state = chunk
+            async for chunk in self._graph.astream(inputs, config=config, stream_mode="values"):
+                final_state = chunk
         except Exception as exc:
             logger.exception("graph run failed: %s", exc)
             trace_id = get_trace_id(handler)

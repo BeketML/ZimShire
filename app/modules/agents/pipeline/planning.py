@@ -45,7 +45,8 @@ async def orchestrator(state: ZimShireState, config: RunnableConfig) -> dict:
     structured_llm = llm.with_structured_output(OrchestratorPlan)
     try:
         plan: OrchestratorPlan = await structured_llm.ainvoke(
-            [SystemMessage(content=ORCHESTRATOR_PLANNER_PROMPT), HumanMessage(content=user_msg)]
+            [SystemMessage(content=ORCHESTRATOR_PLANNER_PROMPT), HumanMessage(content=user_msg)],
+            config=config,
         )
     except Exception as exc:
         logger.error("orchestrator planner failed: %s", exc, exc_info=True)

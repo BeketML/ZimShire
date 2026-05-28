@@ -31,42 +31,33 @@ def _check_available() -> bool:
     return _LANGFUSE_AVAILABLE
 
 
-def make_callback_handler():
+def make_callback_handler(
+    *,
+    user_id: str | None = None,
+    session_id: str | None = None,
+    trace_name: str = "zimshire_turn",
+):
     """Return a LangChain CallbackHandler for the current request.
 
-    Returns None if Langfuse is not configured — callers must handle None.
+    Passes user_id / session_id directly so Langfuse links the trace to the
+    correct user and chat without a separate propagate_attributes context.
+    Returns None if Langfuse is not configured.
     """
     if not _check_available():
         return None
     try:
         from langfuse.langchain import CallbackHandler
-        return CallbackHandler()
+        kwargs: dict = {}
+        if user_id:
+            kwargs["user_id"] = user_id
+        if session_id:
+            kwargs["session_id"] = session_id
+        if trace_name:
+            kwargs["trace_name"] = trace_name
+        return CallbackHandler(**kwargs)
     except Exception as exc:
         logger.warning("Langfuse CallbackHandler creation failed: %s", exc)
         return None
-
-
-def trace_context(*, user_id: str, session_id: str, name: str = "zimshire_turn"):
-    """Context manager that attaches trace metadata to all LLM calls within it.
-
-    Use as:
-        with trace_context(user_id=..., session_id=...):
-            await agent.ainvoke(...)
-    """
-    if not _check_available():
-        from contextlib import nullcontext
-        return nullcontext()
-    try:
-        from langfuse import propagate_attributes
-        return propagate_attributes(
-            trace_name=name,
-            session_id=session_id,
-            user_id=user_id,
-        )
-    except Exception as exc:
-        logger.warning("Langfuse propagate_attributes failed: %s", exc)
-        from contextlib import nullcontext
-        return nullcontext()
 
 
 def get_trace_id(handler) -> str:

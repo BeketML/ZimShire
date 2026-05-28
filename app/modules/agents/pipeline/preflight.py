@@ -40,7 +40,8 @@ async def input_guardrail(state: ZimShireState, config: RunnableConfig) -> dict:
     try:
         llm = get_guardrail_model()
         resp = await llm.ainvoke(
-            [SystemMessage(content=GUARDRAIL_INPUT_PROMPT), HumanMessage(content=last_human)]
+            [SystemMessage(content=GUARDRAIL_INPUT_PROMPT), HumanMessage(content=last_human)],
+            config=config,
         )
         raw = resp.content.strip().replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)

@@ -54,7 +54,7 @@ async def output_guardrail(state: ZimShireState, config: RunnableConfig) -> dict
         resp = await llm.ainvoke([
             SystemMessage(content=GUARDRAIL_OUTPUT_PROMPT),
             HumanMessage(content=f"COLLECTED CONTEXT:\n{full_context}\n\nDRAFT ANSWER:\n{draft}"),
-        ])
+        ], config=config)
         raw = resp.content.strip().replace("```json", "").replace("```", "").strip()
         check = json.loads(raw)
     except Exception as exc:
@@ -138,7 +138,7 @@ async def faithfulness_guardrail(state: ZimShireState, config: RunnableConfig) -
                         f"RETRIEVED PASSAGES:\n{passages}\n\n"
                         f"SYNTHESIZED ANSWER:\n{rag_answer}"
             ),
-        ])
+        ], config=config)
         raw = resp.content.strip().replace("```json", "").replace("```", "").strip()
         result = json.loads(raw)
         grounded = bool(result.get("grounded", True))

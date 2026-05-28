@@ -56,7 +56,8 @@ async def synthesizer(state: ZimShireState, config: RunnableConfig) -> dict:
 
     try:
         resp = await llm.ainvoke(
-            [SystemMessage(content=system_prompt), HumanMessage(content=f"QUERY: {query}")]
+            [SystemMessage(content=system_prompt), HumanMessage(content=f"QUERY: {query}")],
+            config=config,
         )
         draft = resp.content if isinstance(resp.content, str) else str(resp.content)
     except Exception as exc:
