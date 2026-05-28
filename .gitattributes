@@ -1,0 +1,2 @@
+# Ensure shell scripts always use LF in the repo and Docker build context
+*.sh text eol=lf

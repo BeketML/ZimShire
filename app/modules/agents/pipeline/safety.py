@@ -16,7 +16,7 @@ from app.services.llm import get_guardrail_model
 
 logger = logging.getLogger(__name__)
 
-FAITHFULNESS_SCORE_THRESHOLD = 0.75
+FAITHFULNESS_SCORE_THRESHOLD = 0.40
 FAITHFULNESS_MIN_STRONG_HITS = 2
 
 
