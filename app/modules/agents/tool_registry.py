@@ -1,4 +1,4 @@
-"""ToolRegistry — global MCP tool store with tag-based filtering."""
+"""ToolRegistry — MCP tool store with tag-based filtering."""
 from __future__ import annotations
 
 import logging
@@ -14,20 +14,41 @@ from app.modules.agents.tool_allowlists import (
 
 logger = logging.getLogger(__name__)
 
-_all_tools: dict[str, BaseTool] = {}
+
+class ToolRegistry:
+    """Holds all MCP tools and provides tag-based filtering. Stored on app.state."""
+
+    def __init__(self, tools: dict[str, BaseTool] | None = None) -> None:
+        self._tools: dict[str, BaseTool] = dict(tools) if tools else {}
+
+    def set_tools(self, tools: dict[str, BaseTool]) -> None:
+        self._tools = dict(tools)
+        tag_index = {name: sorted(tool_tags(t)) for name, t in self._tools.items()}
+        logger.info("ToolRegistry loaded %d tools: %s", len(self._tools), tag_index)
+
+    def get_tools(self) -> dict[str, BaseTool]:
+        if not self._tools:
+            raise RuntimeError("ToolRegistry is empty — MCP client not initialised")
+        return self._tools
+
+    def matches_agent(self, name: str, tool: BaseTool, agent: AgentName) -> bool:
+        return matches_agent(name, tool, agent)
+
+
+# Module-level registry instance (used by graph nodes that can't receive app.state)
+_registry = ToolRegistry()
 
 
 def set_all_tools(tools: dict[str, BaseTool]) -> None:
-    global _all_tools
-    _all_tools = dict(tools)
-    tag_index = {name: sorted(tool_tags(t)) for name, t in tools.items()}
-    logger.info("MCP registry loaded %d tools: %s", len(tools), tag_index)
+    _registry.set_tools(tools)
 
 
 def get_all_tools() -> dict[str, BaseTool]:
-    if not _all_tools:
-        raise RuntimeError("MCP tools not initialised — call init_mcp_client() first")
-    return _all_tools
+    return _registry.get_tools()
+
+
+def get_registry() -> ToolRegistry:
+    return _registry
 
 
 def tool_tags(tool: BaseTool) -> set[str]:

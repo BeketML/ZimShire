@@ -30,8 +30,6 @@ from app.services.embedding import embed_text
 
 logger = logging.getLogger(__name__)
 
-_short_term_svc = ShortTermMemoryService()
-
 
 def _extract_market_tickers(final_state: dict) -> list[str]:
     for result in final_state.get("subagent_results") or []:
@@ -128,7 +126,7 @@ async def persist_assistant_turn(
     # 4. Long-term memory (fire-and-forget)
     if store is not None and not final_state.get("cache_hit") and not final_state.get("input_blocked"):
         all_messages: list[BaseMessage] = final_state.get("messages") or []
-        recent_turns = _short_term_svc._extract(all_messages, limit=5).turn_pairs
+        recent_turns = ShortTermMemoryService()._extract(all_messages, limit=5).turn_pairs
         market_tickers = _extract_market_tickers(final_state)
         current_profile_dict = final_state.get("user_profile") or {}
         current_profile = UserProfile(

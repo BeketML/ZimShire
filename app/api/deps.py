@@ -1,7 +1,7 @@
 """FastAPI dependency factories for service injection."""
 from __future__ import annotations
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings as _settings
@@ -34,11 +34,10 @@ def get_embedding_provider(config: ConfigProvider = Depends(get_config)) -> Embe
     return LiteLLMEmbedder(config)
 
 
-def get_turn_service():
-    from app.modules.agents.service import get_graph, get_store
+def get_turn_service(request: Request):
     from app.modules.messages.turn_service import TurnOrchestrationService
 
-    return TurnOrchestrationService(get_graph(), get_store())
+    return TurnOrchestrationService(request.app.state.graph, request.app.state.store)
 
 
 def get_chat_repo(db: AsyncSession = Depends(get_db)):

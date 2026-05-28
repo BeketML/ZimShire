@@ -23,7 +23,8 @@ def _configure_logging() -> None:
 _configure_logging()
 from app.api.health import check_mcp, check_postgres, check_qdrant
 from app.modules.agents.mcp_client import close_mcp_client, init_mcp_client
-from app.modules.agents.service import close_graph, init_graph
+from app.modules.agents.service import close_graph, get_graph, get_store, init_graph
+from app.modules.agents.tool_registry import get_registry
 from app.modules.chat_history.router import router as chat_history_router
 from app.modules.chats.router import router as chats_router
 from app.modules.inspect.router import router as inspect_router
@@ -35,6 +36,10 @@ from app.modules.users.router import router as users_router
 async def lifespan(app: FastAPI):
     await init_mcp_client(base_url=settings.mcp_base_url)
     await init_graph(database_url=settings.database_url)
+    # Expose lifespan-scoped singletons on app.state for deps injection
+    app.state.graph = get_graph()
+    app.state.store = get_store()
+    app.state.tool_registry = get_registry()
     yield
     await close_graph()
     await close_mcp_client()
