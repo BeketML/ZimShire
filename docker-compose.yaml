@@ -103,6 +103,18 @@ services:
     networks:
       - zimshire
 
+  frontend:
+    build: ./frontend
+    image: zimshire-frontend:latest
+    container_name: zimshire-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - api
+    networks:
+      - zimshire
+
   pgadmin:
     image: dpage/pgadmin4:8.14
     container_name: zimshire-pgadmin

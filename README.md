@@ -51,6 +51,7 @@ flowchart LR
 |---------|-------------|------|----------------|
 | **FastAPI** | `uvicorn app.main:app` | 8000 | REST API, SSE streaming, LangGraph execution, Postgres audit |
 | **FastMCP** | `python -m mcp_server.main` | 8001 | 3 data tool groups: RAG search, market data, web search |
+| **Frontend** | nginx (built by `npm run build`) | 5173 | React 18 UI — proxies `/api/*` to the API service |
 
 **Hard rule:** `app/` never imports from `mcp_server/`. All tool access goes through `MultiServerMCPClient` at runtime.
 
@@ -222,10 +223,21 @@ Queries embedded and compared against `semantic_cache` via pgvector. On cosine �
 | `LANGFUSE_BASE_URL` | Langfuse host |
 | `DUCKDUCKGO_API_KEY` | SerpApi key for web search |
 
+### Services and ports
+
+| Service | Container | Port | Description |
+|---------|-----------|------|-------------|
+| FastAPI | `zimshire-api` | 8000 | REST API + SSE streaming |
+| FastMCP | `zimshire-mcp` | 8001 | RAG / market / web tools |
+| **Frontend** | `zimshire-frontend` | **5173** | React UI (nginx serving built app) |
+| Postgres | `zimshire-postgres` | 5432 | Database |
+| Qdrant | `zimshire-qdrant` | 6333 | Vector store |
+| pgAdmin | `zimshire-pgadmin` | 5050 | DB admin UI |
+
 ### Quick start
 
 ```bash
-# 1. Start all services
+# 1. Start all services (Postgres, Qdrant, MCP, API, Frontend)
 docker compose up -d
 
 # 2. Migrate database
@@ -236,18 +248,37 @@ python scripts/letters_ingestion.py
 python scripts/semantic_chunk_letters.py
 python scripts/upload_to_qdrant.py --chunks-json data/semantic_chunks.json
 
-# 4. Verify
+# 4. Open the UI
+open http://localhost:5173
+
+# 5. Verify backend
 curl http://localhost:8000/health
 # {"status":"ok","postgres":"ok","qdrant":"ok","mcp":"ok"}
 ```
 
-### Local dev (no Docker for app services)
+### Local dev (frontend hot-reload, no Docker for app services)
 
 ```bash
+# Infrastructure only
 docker compose up -d postgres qdrant
+
+# Backend services (hot-reload)
 python -m mcp_server.main --transport streamable-http --port 8001
 uvicorn app.main:app --reload --port 8000
+
+# Frontend (hot-reload, Vite proxy → localhost:8000)
+cd frontend && npm install && npm run dev
+# → http://localhost:5173
 ```
+
+### Frontend (React UI)
+
+| Mode | Command | URL |
+|------|---------|-----|
+| Docker (production build) | `docker compose up -d frontend` | `http://localhost:5173` |
+| Local dev (hot-reload) | `cd frontend && npm install && npm run dev` | `http://localhost:5173` |
+
+The Docker image builds with `node:20-alpine` → `nginx:alpine`. nginx proxies `/api/*` to the `api` service and serves the SPA from `/usr/share/nginx/html`. The `proxy_buffering off` directive is required for SSE streaming to work through nginx.
 
 ### MCP server for Cursor / Claude Code
 
