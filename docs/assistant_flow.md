@@ -1,10 +1,10 @@
 # ZimShire Assistant Flow
 
-End-to-end user story: from registration through a streamed agent response. For each step this document lists what the system **reads**, what it **writes**, and which storage layer is involved.
+End-to-end request lifecycle: from registration through a streamed agent response. For each stage this document lists what the system **reads**, what it **writes**, and which storage layer is involved.
 
 Related schema reference: [db_schema_reference.md](db_schema_reference.md).
 
-**Storage layers in this flow:**
+**Storage layers:**
 
 | Layer | Role |
 |-------|------|
@@ -12,7 +12,7 @@ Related schema reference: [db_schema_reference.md](db_schema_reference.md).
 | **Postgres (LangGraph)** | Short-term graph state (`checkpoints*`) and long-term memory (`store*`) |
 | **Qdrant** | Buffett letters corpus (read-only at runtime after offline ingest) |
 | **Langfuse** | Traces, latency, token usage (external; linked via `langfuse_trace_id`) |
-| **External APIs** | LiteLLM gateway, yfinance, web search |
+| **LiteLLM Gateway** | All LLM calls (orchestrator, subagents, guardrails, embeddings) |
 
 ---
 
@@ -20,323 +20,277 @@ Related schema reference: [db_schema_reference.md](db_schema_reference.md).
 
 ```mermaid
 flowchart TD
-    reg[Stage1_Registration]
-    chat[Stage2_NewChat]
-    human[Stage3_HumanMessage]
-    inputG[Stage4_InputGuardrail]
-    semCache[Stage5_SemanticCache]
-    mem[Stage6a_LoadMemory]
-    orch["Stage6b_Orchestrator\nrag_agent / market_agent / web_agent\n(tools via MCP SSE)"]
-    outG[Stage8_OutputGuardrail]
-    faithG[Stage9_FaithfulnessGuardrail]
-    stream95[Stage9.5_StreamApprovedAnswer]
-    persist[Stage10_Persist]
+    reg[Stage1 Registration]
+    chat[Stage2 New Chat]
+    human[Stage3 Human Message]
+    inputG[Stage4 Input Guardrail]
+    semCache[Stage5 Semantic Cache]
+    mem[Stage6a Load Memory]
+    orch[Stage6b Orchestrator\nOrchestratorPlan]
+    subs[Stage6.5 Run Subagents\nRAG · market · web parallel]
+    synth[Stage7 Synthesizer\nstream tokens in real-time]
+    outG[Stage8 Output Guardrail]
+    faithG[Stage9 Faithfulness Guardrail]
+    stream[Stage9.5 SSE Stream]
+    persist[Stage10 Persist]
 
     reg --> chat --> human --> inputG
-    inputG -->|blocked| stream95
+    inputG -->|blocked| stream
     inputG --> semCache
-    semCache -->|cache_hit| stream95
+    semCache -->|cache_hit| stream
     semCache -->|cache_miss| mem
-    mem --> orch
-    orch --> outG --> faithG --> stream95 --> persist
+    mem --> orch --> subs --> synth --> outG
+    outG -->|retry| synth
+    outG -->|proceed| faithG
+    faithG --> stream --> persist
 ```
 
-**Multi-turn:** Stages 1–2 run once per user / per new chat. Follow-up messages in the same chat start at Stage 3 (see [Stage 11](#stage-11--resuming-an-existing-chat-multi-turn)).
+**Multi-turn:** Stages 1–2 run once per user / per new chat. Follow-up messages in the same chat start at Stage 3.
 
 ---
 
-## API endpoints (canonical)
-
-Seven REST endpoints — full schemas in [api_endpoints.md](api_endpoints.md):
+## API endpoints (13)
 
 | Method | Path |
 |--------|------|
 | `POST` | `/users` |
 | `GET` | `/users/{user_id}` |
-| `POST` | `/chats` (server generates `chat_id`) |
+| `POST` | `/chats` |
 | `GET` | `/chats/{chat_id}` |
-| `GET` | `/chats/{chat_id}/messages` |
+| `GET` | `/chats/{chat_id}/messages?user_id=` |
 | `POST` | `/chats/{chat_id}/messages` (SSE) |
+| `GET` | `/users/{user_id}/memory/long-term` |
+| `GET` | `/users/{user_id}/chats/{chat_id}/memory/short-term` |
 | `GET` | `/health` |
-
-At `POST /chats` the server generates `chat_id`; for every graph turn pass `config["configurable"]["thread_id"] = str(chat_id)`.
+| `GET` | `/debug/semantic-cache` |
+| `GET` | `/debug/market-data-cache` |
+| `GET` | `/debug/chats/{chat_id}/rag-retrievals` |
+| `GET` | `/debug/chats/{chat_id}/guardrail-logs` |
 
 ---
 
 ## Stage 1 — User registration
 
-**Trigger:** `POST /users`.
+**Trigger:** `POST /users`
 
-**Goal:** Create a stable `user_id` for all chats and long-term memory namespaces.
-
-| Action | Table / store | Operation | Data |
-|--------|---------------|-----------|------|
-| Create identity | `users` | **WRITE** | `user_id` (new uuid4), `created_at` |
-| Initialize profile namespace | `store` | **WRITE** | `prefix = users/{user_id}/profile`, `key = "meta"`, `value = {}` |
-| — | `store_vectors` | — | No rows until profile fields are indexed |
-
-**Reads:** none.
-
-**Notes:**
-
-- Long-term memory uses LangGraph `AsyncPostgresStore`; you do not INSERT into `store` via raw SQL.
-- Optional: also create empty namespace `users/{user_id}/interests` for tracked companies (bonus task).
+| Action | Table | Operation | Data |
+|--------|-------|-----------|------|
+| Create identity | `users` | WRITE | `user_id` (uuid4), `name`, `surname`, `created_at` |
 
 ---
 
-## Stage 2 — Creating a new chat
+## Stage 2 — New chat
 
-**Trigger:** `POST /chats` with `{ user_id, chat_title, model, provider }`.
+**Trigger:** `POST /chats`
 
-**Goal:** Bind a UI conversation to a LangGraph checkpointer thread via `chat_id`. The server generates `chat_id` — the client never chooses it.
+| Action | Table | Operation | Data |
+|--------|-------|-----------|------|
+| Verify user | `users` | READ | `SELECT` by `user_id` |
+| Create session | `chats` | WRITE | `chat_id` (uuid4 = LangGraph `thread_id`), `user_id`, `chat_title`, `model` |
 
-| Action | Table / store | Operation | Data |
-|--------|---------------|-----------|------|
-| Verify user | `users` | **READ** | `SELECT` by `user_id` |
-| Create session | `chats` | **WRITE** | `chat_id` (uuid4), `user_id`, `chat_title`, `model`, `provider`, `created_at`, `updated_at` |
-| First graph run (later) | `checkpoints` | **WRITE** (auto) | Created on first `graph.astream()` with `configurable.thread_id = str(chat_id)` |
-
-**Reads:** `users`.
-
-**Invariant:** `config["configurable"]["thread_id"]` must always equal `str(chat_id)` for that session.
-
-**Notes:**
-
-- No checkpoint row exists until the first message is processed.
-- `model` / `provider` are fixed for this chat; `POST /chats/{id}/messages` can override model per-turn.
+**Invariant:** `config["configurable"]["thread_id"]` always equals `str(chat_id)`.
 
 ---
 
 ## Stage 3 — Human message arrives
 
-**Trigger:** `POST /chats/{chat_id}/messages` with `{ content, model? }`.
+**Trigger:** `POST /chats/{chat_id}/messages`
 
-**Goal:** Persist the human turn and load chat + graph context.
-
-| Action | Table / store | Operation | Data |
-|--------|---------------|-----------|------|
-| Resolve session | `chats` | **READ** | `chat_id`, `model`, `provider`, `user_id` |
-| Persist human turn | `messages` | **WRITE** | `message_id`, `chat_id`, `role = "human"`, `content`, `grounded = NULL`, `langfuse_trace_id = NULL`, `created_at` |
-| Restore graph state | `checkpoints`, `checkpoint_blobs` | **READ** (auto) | Latest snapshot for `str(chat_id)` (empty on first turn) |
-
-**Reads:** `chats`, LangGraph checkpointer tables (if not first turn).
-
-**Writes:** `messages` (human row).
-
-**Langfuse:** Start a session/trace for this user query; keep `trace_id` in memory until the assistant message is saved.
+| Action | Table | Operation | Data |
+|--------|-------|-----------|------|
+| Resolve session | `chats` | READ | `chat_id`, `model`, `user_id` |
+| Persist human turn | `messages` | WRITE | `message_id`, `chat_id`, `role="human"`, `content`, `grounded=NULL` |
+| Restore graph state | `checkpoints`, `checkpoint_blobs` | READ (auto) | Latest snapshot for `str(chat_id)` |
 
 ---
 
 ## Stage 4 — Input guardrail
 
-**Trigger:** First node in the LangGraph pipeline (before tools / LLM).
+**Node:** `input_guardrail` in `pipeline/preflight.py`
 
-**Goal:** Block off-topic queries and prompt injection; log every check.
+**Goal:** Block off-topic queries, prompt injection, and personal advice requests.
 
-| Action | Table / store | Operation | Data |
-|--------|---------------|-----------|------|
-| Log check | `guardrail_logs` | **WRITE** | `message_id` (human), `guardrail_type = "input"`, `result`, `confidence`, `blocked_reason`, `checked_at` |
-| Checkpoint | `checkpoints`, `checkpoint_blobs`, `checkpoint_writes` | **READ/WRITE** (auto) | Graph state after guardrail node |
+**Implementation:** Single `gpt-4o-mini` call returning `{blocked: bool, reason: str|null}`. Fail-open on LLM error.
 
-**Reads:** none from custom tables (classifier uses `messages.content` in memory).
+| Action | Table | Operation | Data |
+|--------|-------|-----------|------|
+| Log check | `guardrail_logs` | WRITE | `message_id` (human), `guardrail_type="input"`, `result`, `blocked_reason` |
+| Checkpoint | `checkpoints*` | READ/WRITE (auto) | Graph state after node |
 
-**If `result = "blocked"`:**
-
-- Return a friendly refusal to the client (stream or JSON).
-- **Do not** run semantic cache, RAG, market, web, or LLM.
-- **Do not** insert an assistant row (optional: insert a short assistant refusal — product choice).
-- Stop pipeline.
+**If blocked:** Adds safe `AIMessage` to state, routes to END. Client receives `blocked` + `done` SSE events. No assistant row written.
 
 ---
 
 ## Stage 5 — Semantic cache check
 
-**Trigger:** After input guardrail passes (bonus task; optional in MVP).
+**Node:** `semantic_cache_check` in `pipeline/preflight.py`
 
-**Goal:** Avoid redundant LLM calls for semantically similar questions.
+**Goal:** Avoid LLM calls for semantically similar queries.
 
-| Action | Table / store | Operation | Data |
-|--------|---------------|-----------|------|
-| Embed query | — | external | Embedding model via LiteLLM gateway |
-| Find similar | `semantic_cache` | **READ** | pgvector: nearest `query_embedding` where similarity ≥ threshold and (`expires_at` IS NULL OR `expires_at > now()`) |
-| On HIT | `semantic_cache` | **WRITE** | `UPDATE hit_count = hit_count + 1` |
-| On HIT — Langfuse | Langfuse | **WRITE** (external) | Minimal trace with 1 span `type=cache_hit` (no LLM cost); `trace_id` stored on assistant row |
-| On HIT response | `messages` | **WRITE** | Assistant row with `content = cached_response`, `grounded` from cached `sources` metadata, `langfuse_trace_id` set |
-| On MISS | — | — | Continue to Stage 6 |
+| Action | Table | Operation | Data |
+|--------|-------|-----------|------|
+| Embed query | — | LiteLLM | `text-embedding-3-small` |
+| Find similar | `semantic_cache` | READ | pgvector cosine ≥ 0.92, not expired |
+| On HIT | `semantic_cache` | WRITE | `hit_count += 1` |
 
-**Cache HIT shortcut:** Skip agent graph. FastAPI streams `cached_response` as SSE token events (same chunked streaming as a live answer). A Langfuse trace is created for every request including cache hits — Task 5 requires "every user query must produce a session with traces."
+**On HIT:** Skip all LLM calls. `draft_answer`, `sources`, and `grounded` come from the cache row. FastAPI streams the cached answer as SSE token events. A Langfuse trace is still created.
 
-**Reads:** `semantic_cache`.
-
-**Writes (HIT path):** `semantic_cache` (hit_count), `messages` (assistant with `langfuse_trace_id`), Langfuse trace.
+**On MISS:** Continue to Stage 6.
 
 ---
 
-## Stage 6 — LangGraph agent graph runs
+## Stage 6a — Load memory
 
-**Trigger:** Cache miss (or semantic cache disabled).
+**Node:** `load_memory` in `pipeline/preflight.py`
 
-**Goal:** Load short-term + long-term memory, then run the orchestrator (with `rag_agent`, `market_agent`, `web_agent` tools) to produce `draft_answer`.
+| Memory | Source | API |
+|--------|--------|-----|
+| **Long-term** | `store` / `store_vectors` | `LongTermMemoryService.load_profile(user_id, query)` |
+| **Short-term** | `checkpoints` (messages) | `ShortTermMemoryService.format_recent_turns()` — formatted inline for system prompt, NOT stored in state |
 
-### Automatic checkpointer (every node boundary)
+**Returns:** `user_profile: {tracked_companies, research_interests, preferences, explicit_memories}`
 
-| Table | Operation | Purpose |
-|-------|-----------|---------|
-| `checkpoints` | **READ** then **WRITE** | Full graph snapshot (`checkpoint` jsonb, `metadata`) |
-| `checkpoint_blobs` | **READ** then **WRITE** | Large/binary channel values |
-| `checkpoint_writes` | **WRITE** | Pending writes before commit |
+---
 
-LangGraph handles this; application code does not write SQL to these tables.
+## Stage 6b — Orchestrator (planner)
 
-**Configurable passed to graph:**
+**Node:** `orchestrator` in `pipeline/planning.py` — Model: `claude-sonnet-4-6`
+
+**Goal:** Decide which subagents to invoke. Does **not** call tools — it plans.
+
+**Implementation:** `llm.with_structured_output(OrchestratorPlan)` — returns a typed plan, not a ReAct loop.
 
 ```python
-config = {
-    "configurable": {
-        "thread_id": str(chat.chat_id),
-        "user_id": str(chat.user_id),
-    }
-}
+class OrchestratorPlan(BaseModel):
+    subagents: list[SubagentPlanItem]   # name: rag|market|web, enabled: bool
+    direct_answer_possible: bool        # True for conversational follow-ups
+    reasoning: str
 ```
 
-### 6a — `load_memory` (short-term + long-term)
-
-| Memory | Source | Operation | State field |
-|--------|--------|-----------|-------------|
-| **Short-term** | Checkpointer `messages` | Formatted inline in orchestrator system prompt only (not stored) | — |
-| **Long-term** | `store` / `store_vectors` | `store.asearch(users/{user_id}/interests, query=state["query"])` | `user_preferences` |
-
-**Writes:** none (`store.aput` in Stage 10).
-
-### 6b — `orchestrator` (research lead + subagent tools)
-
-Single ReAct node. Closure accumulator → graph state on node return:
-
-| Subagent tool | State fields written |
-|---------------|----------------------|
-| `rag_agent` | `rag_agent_chunks`, `rag_agent_result`, `rag_invoked` |
-| `market_agent` | `market_agent_result` (JSON text); cache via `market_data_cache` on miss |
-| `web_agent` | `web_agent_sources`, `web_agent_result` |
-
-Plus: `draft_answer`, `messages` (assistant turn).
-
-**Tool path:** `orchestrator` → `app/graph/tools/subagents.py` → `mcp_client.py` → `mcp_server/server.py`.
-
-**Postgres:** `rag_retrievals` deferred to Stage 10 (from `rag_agent_chunks`).
+**Writes to state:** `subagent_plan` (serialised `OrchestratorPlan`)
 
 ---
 
-## Stage 7 — (merged into orchestrator)
+## Stage 6.5 — Run subagents (parallel)
 
-Synthesis is no longer a separate graph node. The orchestrator produces `draft_answer` in the same step as tool calls. Guardrails in Stages 8–9 still run on the complete text before any client streaming.
+**Node:** `run_subagents` in `pipeline/research/runner.py` — Model: `claude-haiku-4-5` per subagent
+
+**Goal:** Execute the enabled subagents in parallel and accumulate results.
+
+**Implementation:** `asyncio.gather` over all enabled items from `subagent_plan`. Each subagent runs its own ReAct loop with filtered MCP tools.
+
+| Subagent | MCP tool(s) | Cache |
+|----------|------------|-------|
+| `rag` | `search_buffett_letters` | Qdrant (via MCP) |
+| `market` | 12 yfinance tools | `market_data_cache` (1-hour TTL) |
+| `web` | `web_search`, `web_search_news` | None |
+
+**Writes to state:** `collected_context` (`{rag, market, web}`), `rag_agent_chunks`, `rag_invoked`, `web_agent_sources`, `subagent_results`
+
+**DB:** `market_data_cache` READ/WRITE per market tool call.
+
+---
+
+## Stage 7 — Synthesizer
+
+**Node:** `synthesizer` in `pipeline/synthesis.py` — Model: `claude-sonnet-4-6`
+
+**Goal:** Produce the final answer from all collected context.
+
+**Key change:** Uses `llm.astream()` so LangGraph's `stream_mode="messages"` captures tokens in real-time. These tokens are forwarded as SSE `token` events to the client as they're generated — users see the answer being written character by character.
+
+System prompt includes: user profile, last 5 conversation turns, collected context (RAG + market + web), optional `feedback_message` if this is a guardrail retry.
+
+**Writes to state:** `draft_answer`, `messages` (AIMessage), `feedback_message=None`
 
 ---
 
 ## Stage 8 — Output guardrail
 
-**Trigger:** After `orchestrator` completes; full `draft_answer` is in graph state.
+**Node:** `output_guardrail` in `pipeline/safety.py` — Model: `gpt-4o-mini`
 
-**Goal:** Block or rewrite buy/sell advice, price targets, personalized portfolio recommendations.
+**Goal:** Block buy/sell advice, price targets, and factual hallucinations.
 
-| Action | Table / store | Operation | Data |
-|--------|---------------|-----------|------|
-| Log check | `guardrail_logs` | **WRITE** | `guardrail_type = "output"`, `result`, `confidence`, `blocked_reason` |
-| On blocked | — | in-memory | Replace `content` with safe rewritten text before Stage 9–10 |
+**Implementation:** Single LLM call against the **full collected context** (RAG + market + web + user profile + conversation). Checks:
+1. **Safety** — buy/sell/price targets/portfolio advice
+2. **Factual** — claims not found in any context source
 
-**Reads:** none.
+| Action | Table | Operation |
+|--------|-------|-----------|
+| Log check | `guardrail_logs` | WRITE |
+| On violation: retry | state | feedback_message written |
+| On exhaustion: replace | state | `output_rewritten=True`, `draft_answer=safe_fallback` |
 
-**Note:** `message_id` for this log should reference the **human** turn being answered, or the **assistant** row if you create a placeholder first — pick one convention and keep it consistent.
+**Retry logic:** On violation + `retry_count < 2` → writes `feedback_message` → routes back to `synthesizer`. If synthesis tokens were already streamed, a `replace` SSE event is sent to the client.
+
+**Max retries:** `output_guardrail_max_retries=2` (from `config.py`)
 
 ---
 
 ## Stage 9 — Faithfulness guardrail
 
-**Trigger:** Only when `rag_invoked` is true and the answer cites or relies on Buffett letters.
+**Node:** `faithfulness_guardrail` in `pipeline/safety.py` — Model: `gpt-4o-mini`
 
-**Goal:** Ensure letter claims match retrieved passages; set `grounded`.
+**Runs only when** `rag_invoked=True`.
 
-| Action | Table / store | Operation | Data |
-|--------|---------------|-----------|------|
-| Log check | `guardrail_logs` | **WRITE** | `guardrail_type = "faithfulness"`, `result`, `confidence` |
-| Set flag | — | in-memory | `grounded = true` if ≥ 2 strong hits; `grounded = false` otherwise |
+**Goal:** Determine whether the answer is grounded in retrieved Buffett letter passages.
 
-**Rules (from product spec):**
+**Implementation:** LLM evaluates the answer against retrieved passages, returning `{grounded: bool, score: float}`. Fallback (if LLM fails): similarity threshold check.
 
-- Strong hit = `similarity_score ≥ 0.75`.
-- `grounded = true` when `rag_invoked` and `len(strong_hits) >= 2`; `sources` = strong hits.
-- `grounded = false` when `rag_invoked` but fewer than 2 strong hits; response must not invent letter quotes.
-- `grounded = null` when `rag_invoked = false` (market-only or web-only answer).
+**Strong hit threshold:** `FAITHFULNESS_SCORE_THRESHOLD = 0.40` — calibrated for `text-embedding-3-small`'s cosine scale (relevant passages score 0.35–0.55, not 0.7–0.9).
 
-**Reads:** `rag_agent_chunks` from state (not `rag_retrievals` rows yet — inserted in Stage 10).
+| Action | Table | Operation |
+|--------|-------|-----------|
+| Log check | `guardrail_logs` | WRITE `guardrail_type="faithfulness"` |
+
+**`grounded=false` does NOT block the answer** — it's a transparency flag. The `done` event carries `grounded=false, sources=[]` so the client can show a disclaimer.
 
 ---
 
-## Stage 9.5 — Stream approved answer to client
+## Stage 9.5 — Stream approved answer
 
-**Trigger:** Both `output_guardrail` and `faithfulness_guardrail` have completed; `draft_answer` contains the final, guardrail-approved text.
+**Goal:** Deliver the synthesizer output as SSE token events.
 
-**Goal:** Deliver the answer to the client via SSE token events. This is the only point where tokens are sent — guaranteeing the client always receives guardrail-approved content.
+With real-time streaming (`stream_mode=["messages","values"]`), synthesizer tokens are already flowing to the client as they're generated (Stage 7). Stage 9.5 handles:
+- **Progress events:** emitted at stage boundaries (`subagent_plan` and `collected_context` state transitions)
+- **Replace event:** if `output_rewritten=True`, send `{"type":"replace","content":"..."}` to tell the client to discard prior tokens
+- **Cache hits:** stream cached answer as word-chunks (no LLM running)
+- **Blocked queries:** send `{"type":"blocked","reason":"..."}` then `done`
 
-| Action | Where | Operation |
-|--------|-------|-----------|
-| Read `draft_answer` from final graph state | in-memory | — |
-| Split text into word-chunks (~4 words each) | FastAPI | — |
-| Send `{"type": "token", "content": "..."}` SSE events | HTTP | stream to client |
-
-**No Postgres writes here.** Persistence happens in Stage 10, after streaming completes.
+No Postgres writes here. Persistence happens in Stage 10.
 
 ---
 
 ## Stage 10 — Persist assistant response
 
-**Trigger:** After output and faithfulness guardrails pass (or safe rewrite).
+**Trigger:** After output + faithfulness guardrails complete.
 
-**Goal:** Durably store the assistant turn, retrieval audit trail, caches, and memory updates.
+| Order | Table | Operation | Data |
+|-------|-------|-----------|------|
+| 1 | `messages` | WRITE | `role="assistant"`, `content`, `grounded`, `langfuse_trace_id`, `created_at` |
+| 2 | `rag_retrievals` | WRITE (N rows) | One row per Qdrant hit: `message_id`, `letter_year`, `passage_snippet`, `similarity_score`, `used_in_response` |
+| 3 | `semantic_cache` | WRITE | `query_embedding`, `original_query`, `cached_response`, `sources`, `expires_at` |
+| 4 | `store` / `store_vectors` | WRITE (async) | `store.aput` for new interests extracted from this turn (fire-and-forget) |
+| 5 | `chats` | UPDATE | `updated_at = now()` |
+| 6 | `checkpoints*` | WRITE (auto) | Final graph state including full `messages` history |
 
-| Order | Table / store | Operation | Data |
-|-------|---------------|-----------|------|
-| 1 | `messages` | **WRITE** | `role = "assistant"`, `content`, `grounded`, `langfuse_trace_id`, `created_at` |
-| 2 | `rag_retrievals` | **WRITE** (N rows) | One row per Qdrant hit: `message_id`, `qdrant_collection`, `qdrant_point_id`, `rank`, `letter_year`, `passage_snippet`, `similarity_score`, `used_in_response` |
-| 3 | `semantic_cache` | **WRITE** | `query_embedding`, `original_query`, `cached_response`, `sources`, `hit_count = 0`, `expires_at` |
-| 4 | `store` / `store_vectors` | **WRITE** (via API) | `store.aput` for new companies/interests extracted from this turn |
-| 5 | `chats` | **UPDATE** | `updated_at = now()` |
-| 6 | `checkpoints*` | **WRITE** (auto) | Final graph state including full `messages` history |
-
-**`used_in_response`:** Set `true` on `rag_retrievals` rows whose `letter_year` / snippet appear in the final answer (post-hoc string match or LLM attribution step).
-
-**Unique constraint:** `(message_id, qdrant_collection, qdrant_point_id)` on `rag_retrievals`.
+**`used_in_response`:** Set `true` on `rag_retrievals` rows whose `qdrant_point_id` appears in `sources` from the faithfulness guardrail.
 
 ---
 
 ## Stage 11 — Resuming an existing chat (multi-turn)
 
-**Trigger:** Client sends another `POST /chats/{chat_id}/messages` to the same `chat_id` (e.g. *"Now compare that to what he said about banks in 1990."*).
+**Trigger:** Another `POST /chats/{chat_id}/messages` to the same `chat_id`.
 
-**What is skipped:** Stage 1 (registration), Stage 2 (new chat).
+Stages 1–2 are skipped. Stage 3 → 10 run normally.
 
-**What runs:** Stage 3 → 4 → 5 → 6 → … → 10.
+The LangGraph checkpointer restores full message history from `checkpoints*`. The orchestrator and synthesizer see all prior turns in `state["messages"]`.
 
-| Action | Table / store | Operation |
-|--------|---------------|-----------|
-| Load chat | `chats` | **READ** `chat_id`, `user_id`, `model` |
-| Save human message | `messages` | **WRITE** |
-| Restore full thread | `checkpoints`, `checkpoint_blobs` | **READ** all prior turns in graph state |
-| Long-term memory | `store`, `store_vectors` | **READ** interests relevant to new query |
-
-**Why multi-turn works:** LangGraph checkpointer keys state by `thread_id`. Custom `messages` table is the human-readable audit log; the graph’s `messages` channel is the source of truth for the agent during execution. Keep them aligned by appending each turn to both.
-
----
-
-## Offline path (not in request flow)
-
-**When:** Once before deployment (Task 2).
-
-| Store | Operation | Data |
-|-------|-----------|------|
-| **Qdrant** `buffett_letters` | **WRITE** (bulk upsert) | All letter chunks: `point_id`, vector, payload |
-| Postgres custom tables | — | No user/chat data |
-
-Runtime only **reads** Qdrant; corpus re-ingestion is out of scope for the assignment.
+```
+Turn 1: "How would Buffett evaluate Apple's moat?" → RAG invoked
+Turn 2: "Compare to Coca-Cola in 1988."
+         → messages restored → RAG invoked with years=[1988] hint
+```
 
 ---
 
@@ -344,49 +298,14 @@ Runtime only **reads** Qdrant; corpus re-ingestion is out of scope for the assig
 
 | Table | READ | WRITE |
 |-------|------|-------|
-| `users` | Verify `user_id` exists (new chat) | Registration: new `user_id` |
-| `chats` | `chat_id`, `model`, `provider`, `user_id` per request | Create chat; `UPDATE updated_at` after assistant reply |
-| `messages` | Optional: history API for UI | Human turn; assistant turn (`grounded`, `langfuse_trace_id`) |
-| `rag_retrievals` | Optional: citations API | One row per Qdrant hit after assistant message |
-| `guardrail_logs` | Analytics only | `input`, `output`, `faithfulness` per check |
-| `market_data_cache` | TTL lookup by `ticker` + `data_type` | New row on yfinance miss |
-| `semantic_cache` | Vector similarity on user query | New row after LLM answer; `hit_count++` on hit |
-| `checkpoints` | Restore graph state per `str(chat_id)` | Auto after each graph node |
-| `checkpoint_blobs` | Restore channel blobs | Auto after each graph node |
-| `checkpoint_writes` | — | Auto pending writes |
-| `store` | User profile / interests | Profile init; `aput` new interests (Stage 10) |
-| `store_vectors` | `asearch` for personalization | Auto when indexed fields updated |
-| **Qdrant** | RAG search at runtime | Offline ingest only |
-| **Langfuse** | Dashboard | Traces/spans per request and LLM call |
-
----
-
-## Example API response shape (after Stage 10)
-
-```json
-{
-  "message_id": "uuid",
-  "role": "assistant",
-  "content": "...",
-  "grounded": true,
-  "sources": [
-    { "letter_year": 1988, "passage": "...", "similarity_score": 0.87 }
-  ],
-  "langfuse_trace_id": "trace-..."
-}
-```
-
-`sources` can be built from `rag_retrievals` rows where `used_in_response = true`, or returned directly from graph state before persistence.
-
----
-
-## Implementation checklist
-
-1. **Migrations** — Alembic/SQL for all custom tables per [db_schema_reference.md](db_schema_reference.md).
-2. **LangGraph setup** — `AsyncPostgresSaver` + `AsyncPostgresStore` with `setup()` on app startup.
-3. **thread_id sync** — Always `str(chat_id)` in `configurable`; no separate column in `chats`.
-4. **Guardrails** — Three explicit log rows; block early on input.
-5. **RAG** — Query Qdrant in graph; persist `rag_retrievals` only after assistant `message_id` exists.
-6. **Langfuse** — One trace per user message; store ID on assistant row.
-7. **Streaming** — Buffer final text for guardrails, then persist in Stage 10.
-8. **Tests** — Integration tests for: input block, cache hit, cache miss + RAG persist, multi-turn checkpoint restore.
+| `users` | Verify user (Stage 2) | Registration (Stage 1) |
+| `chats` | `chat_id`, `model`, `user_id` per request | Create (Stage 2); `updated_at` (Stage 10) |
+| `messages` | History API | Human turn (Stage 3); assistant turn (Stage 10) |
+| `rag_retrievals` | Debug API | One row per Qdrant hit (Stage 10) |
+| `guardrail_logs` | Debug API | Input/output/faithfulness checks (Stages 4, 8, 9) |
+| `market_data_cache` | TTL lookup per ticker (Stage 6.5) | New row on yfinance miss |
+| `semantic_cache` | Similarity search (Stage 5) | New row after answer (Stage 10); `hit_count++` on hit |
+| `checkpoints*` | Restore per `str(chat_id)` | Auto after each graph node |
+| `store` / `store_vectors` | User profile (Stage 6a) | Interests (Stage 10) |
+| **Qdrant** | RAG search via MCP (Stage 6.5) | Offline ingest only |
+| **Langfuse** | Dashboard | Trace per request + LLM generation spans |
