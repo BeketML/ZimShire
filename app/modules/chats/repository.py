@@ -8,6 +8,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import Chat
 
 
+class SqlChatRepository:
+    """Thin wrapper satisfying ChatRepositoryProtocol."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def get(self, chat_id: UUID) -> Chat | None:
+        return await get_chat(self._s, chat_id)
+
+    async def create(
+        self, *, user_id: UUID, chat_title: str | None, model: str, provider: str
+    ) -> Chat:
+        return await create_chat(self._s, user_id=user_id, chat_title=chat_title, model=model, provider=provider)
+
+    async def touch(self, chat_id: UUID) -> None:
+        await touch_chat(self._s, chat_id)
+
+
 async def create_chat(
     session: AsyncSession,
     *,

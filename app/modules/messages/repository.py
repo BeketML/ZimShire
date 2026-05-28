@@ -8,6 +8,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import Message
 
 
+class SqlMessageRepository:
+    """Thin wrapper satisfying MessageRepositoryProtocol."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def list(self, chat_id: UUID) -> list[Message]:
+        return await list_messages(self._s, chat_id)
+
+    async def create_human(self, *, chat_id: UUID, content: str) -> Message:
+        return await create_human_message(self._s, chat_id=chat_id, content=content)
+
+    async def create_assistant(
+        self,
+        *,
+        chat_id: UUID,
+        content: str,
+        grounded: bool | None,
+        langfuse_trace_id: str | None,
+    ) -> Message:
+        return await create_assistant_message(
+            self._s,
+            chat_id=chat_id,
+            content=content,
+            grounded=grounded,
+            langfuse_trace_id=langfuse_trace_id,
+        )
+
+
 async def create_human_message(session: AsyncSession, *, chat_id: UUID, content: str) -> Message:
     msg = Message(chat_id=chat_id, role="human", content=content)
     session.add(msg)
