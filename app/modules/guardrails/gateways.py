@@ -32,4 +32,10 @@ async def write_guardrail_log(
             )
             await session.commit()
     except Exception as exc:
-        logger.warning("guardrail_logs insert failed: %s", exc)
+        logger.error(
+            "guardrail_logs insert failed (type=%s result=%s): %s",
+            guardrail_type,
+            result,
+            exc,
+            exc_info=True,
+        )

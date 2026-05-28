@@ -17,7 +17,7 @@ async def lookup_market(ticker: str, data_type: str) -> dict | None:
             row = await repository.get_valid_market(session, ticker=ticker, data_type=data_type)
             return row.payload if row else None
     except Exception as exc:
-        logger.warning("cache.lookup_market failed: %s", exc)
+        logger.error("cache.lookup_market(%s, %s) failed: %s", ticker, data_type, exc, exc_info=True)
         return None
 
 
@@ -27,7 +27,7 @@ async def store_market(ticker: str, data_type: str, payload: dict[str, Any]) -> 
             await repository.upsert_market(session, ticker=ticker, data_type=data_type, payload=payload)
             await session.commit()
     except Exception as exc:
-        logger.warning("cache.store_market failed: %s", exc)
+        logger.error("cache.store_market(%s, %s) failed: %s", ticker, data_type, exc, exc_info=True)
 
 
 async def lookup_semantic(embedding: list[float]):
@@ -42,7 +42,7 @@ async def lookup_semantic(embedding: list[float]):
             await session.commit()
             return row, sim
     except Exception as exc:
-        logger.warning("cache.lookup_semantic failed: %s", exc)
+        logger.error("cache.lookup_semantic failed: %s", exc, exc_info=True)
         return None
 
 
@@ -66,4 +66,4 @@ async def write_semantic(
             )
             await session.commit()
     except Exception as exc:
-        logger.warning("cache.write_semantic failed: %s", exc)
+        logger.error("cache.write_semantic failed: %s", exc, exc_info=True)
