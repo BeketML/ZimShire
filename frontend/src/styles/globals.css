@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-navy text-cream font-mono;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-navy-800;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-navy-600 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gold-dark;
+  }
+}
+
+@layer components {
+  /* Markdown prose inside message bubbles */
+  .prose-research h1, .prose-research h2, .prose-research h3 {
+    @apply font-display text-cream font-semibold mt-4 mb-2;
+  }
+  .prose-research h1 { @apply text-xl; }
+  .prose-research h2 { @apply text-lg; }
+  .prose-research h3 { @apply text-base; }
+  .prose-research p {
+    @apply mb-3 leading-relaxed;
+  }
+  .prose-research ul, .prose-research ol {
+    @apply mb-3 pl-5 space-y-1;
+  }
+  .prose-research ul { @apply list-disc; }
+  .prose-research ol { @apply list-decimal; }
+  .prose-research li { @apply leading-relaxed; }
+  .prose-research strong { @apply text-gold font-semibold; }
+  .prose-research em { @apply text-cream-200 italic; }
+  .prose-research code {
+    @apply bg-navy-700 text-gold-light px-1 py-0.5 rounded text-sm;
+  }
+  .prose-research pre {
+    @apply bg-navy-700 p-3 rounded-lg mb-3 overflow-x-auto;
+  }
+  .prose-research pre code {
+    @apply bg-transparent px-0 py-0;
+  }
+  .prose-research hr {
+    @apply border-navy-600 my-4;
+  }
+  .prose-research blockquote {
+    @apply border-l-2 border-gold pl-4 text-cream-200 italic my-3;
+  }
+  .prose-research a {
+    @apply text-gold underline underline-offset-2;
+  }
+}
