@@ -8,6 +8,7 @@ from uuid import UUID
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from app.core.config import settings
 from app.core.prompts import GUARDRAIL_OUTPUT_PROMPT
 from app.modules.agents.state import ZimShireState
 from app.modules.guardrails.gateways import write_guardrail_log
@@ -52,7 +53,7 @@ async def output_guardrail(state: ZimShireState, config: RunnableConfig) -> dict
         raw = resp.content.strip().replace("```json", "").replace("```", "").strip()
         check = json.loads(raw)
     except Exception as exc:
-        logger.warning("output_guardrail LLM call failed (%s) — passing through", exc)
+        logger.error("output_guardrail LLM call failed (%s) — passing through (fail-open)", exc, exc_info=True)
         await write_guardrail_log(message_id=mid, guardrail_type="output", result="passed")
         return {"output_blocked": False, "output_rewritten": False, "feedback_message": None}
 

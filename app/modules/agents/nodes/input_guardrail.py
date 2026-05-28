@@ -8,6 +8,7 @@ from uuid import UUID
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from app.core.config import settings
 from app.core.prompts import GUARDRAIL_INPUT_PROMPT
 from app.modules.agents.state import ZimShireState
 from app.modules.guardrails.gateways import write_guardrail_log
@@ -42,9 +43,13 @@ async def input_guardrail(state: ZimShireState, config: RunnableConfig) -> dict:
         blocked = bool(result.get("blocked"))
         reason = result.get("reason") or None
     except Exception as exc:
-        logger.warning("input_guardrail LLM call failed (%s) — allowing through", exc)
-        blocked = False
+        # Explicit: fail-open (allow) or fail-closed (block) on LLM error
+        blocked = not settings.fail_open_on_guardrail_error
         reason = None
+        if blocked:
+            logger.error("input_guardrail LLM failed (%s) — blocking (fail-closed)", exc, exc_info=True)
+        else:
+            logger.warning("input_guardrail LLM failed (%s) — allowing through (fail-open)", exc)
 
     await write_guardrail_log(
         message_id=mid,

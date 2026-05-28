@@ -7,6 +7,7 @@ import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from app.core.exceptions import AgentPlanError
 from app.core.prompts import ORCHESTRATOR_PLANNER_PROMPT
 from app.modules.agents.schemas import OrchestratorPlan
 from app.modules.agents.state import ZimShireState
@@ -48,8 +49,8 @@ async def orchestrator(state: ZimShireState, config: RunnableConfig) -> dict:
             [SystemMessage(content=ORCHESTRATOR_PLANNER_PROMPT), HumanMessage(content=user_msg)]
         )
     except Exception as exc:
-        logger.warning("orchestrator planner failed (%s) — defaulting to direct answer", exc)
-        plan = OrchestratorPlan(subagents=[], direct_answer_possible=True)
+        logger.error("orchestrator planner failed: %s", exc, exc_info=True)
+        raise AgentPlanError(f"orchestrator planner failed: {exc}") from exc
 
     enabled = [s for s in plan.subagents if s.enabled]
     logger.info(

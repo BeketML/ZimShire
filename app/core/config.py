@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_base_url: str = ""
+    fail_open_on_guardrail_error: bool = True
 
     model_config = SettingsConfigDict(
         env_file=str(REPO_ROOT / ".env"),
