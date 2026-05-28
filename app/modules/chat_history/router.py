@@ -1,6 +1,7 @@
 """HTTP endpoints for inspecting short-term and long-term memory."""
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,30 +22,30 @@ router = APIRouter(tags=["chat_history"])
 _short_term_svc = ShortTermMemoryService()
 
 
-class TurnPairSchema(BaseModel):
-    human: str
-    assistant: str
+# ── Long-term memory ─────────────────────────────────────────────────────────
 
 
-class ShortTermMemoryResponse(BaseModel):
-    user_id: UUID
-    chat_id: UUID
-    thread_id: str
-    turn_pairs: list[TurnPairSchema]
-    formatted: str
-    message_count: int
+class RawStoreItem(BaseModel):
+    namespace: str
+    key: str
+    value: dict[str, Any]
 
 
 class LongTermMemoryResponse(BaseModel):
     user_id: UUID
+    search_query: str
+    # Aggregated profile (merged view across all store items)
     profile: UserProfile
-    search_query: str = ""
+    # Every raw item in the store — see exactly what is persisted
+    raw_store_items: list[RawStoreItem]
+    interests_count: int
+    has_profile_meta: bool
 
 
 @router.get("/users/{user_id}/memory/long-term", response_model=LongTermMemoryResponse)
 async def get_long_term_memory(
     user_id: UUID,
-    query: str = Query(default="", max_length=500),
+    query: str = Query(default="", max_length=500, description="Optional: filter interests by semantic similarity"),
     db: AsyncSession = Depends(get_db),
 ) -> LongTermMemoryResponse:
     user = await user_repo.get_user(db, user_id)
@@ -53,8 +54,42 @@ async def get_long_term_memory(
 
     store = get_store()
     svc = LongTermMemoryService(store)
-    profile = await svc.load_profile(str(user_id), query)
-    return LongTermMemoryResponse(user_id=user_id, profile=profile, search_query=query)
+    profile, raw = await svc.load_profile_with_raw(str(user_id), query)
+
+    interests = [r for r in raw if r["namespace"].endswith("/interests")]
+    has_meta = any(r["namespace"].endswith("/profile") for r in raw)
+
+    return LongTermMemoryResponse(
+        user_id=user_id,
+        search_query=query,
+        profile=profile,
+        raw_store_items=[RawStoreItem(**r) for r in raw],
+        interests_count=len(interests),
+        has_profile_meta=has_meta,
+    )
+
+
+# ── Short-term memory ────────────────────────────────────────────────────────
+
+
+class TurnPairSchema(BaseModel):
+    index: int
+    human: str
+    assistant: str
+
+
+class ShortTermMemoryResponse(BaseModel):
+    user_id: UUID
+    chat_id: UUID
+    thread_id: str
+    # All turn pairs stored in the checkpoint
+    all_turn_pairs: list[TurnPairSchema]
+    total_turns: int
+    # Last N pairs (what the agent actually uses as context)
+    recent_turn_pairs: list[TurnPairSchema]
+    context_window: int
+    formatted: str
+    message_count: int
 
 
 @router.get(
@@ -64,7 +99,7 @@ async def get_long_term_memory(
 async def get_short_term_memory(
     user_id: UUID,
     chat_id: UUID,
-    limit_turn_pairs: int = Query(default=5, ge=1, le=20),
+    limit_turn_pairs: int = Query(default=10, ge=1, le=50, description="How many recent pairs to show as agent context"),
     db: AsyncSession = Depends(get_db),
 ) -> ShortTermMemoryResponse:
     chat = await get_chat(db, chat_id)
@@ -76,13 +111,29 @@ async def get_short_term_memory(
     thread_id = str(chat_id)
     graph = get_graph()
     messages = await load_messages_from_checkpointer(graph, thread_id=thread_id)
-    ctx = _short_term_svc._extract(messages, limit=limit_turn_pairs)
+
+    # All pairs ever in this chat
+    all_ctx = _short_term_svc._extract(messages, limit=9999)
+    all_pairs = [
+        TurnPairSchema(index=i, human=p.human, assistant=p.assistant)
+        for i, p in enumerate(all_ctx.turn_pairs, start=1)
+    ]
+
+    # Recent N pairs (what the agent uses)
+    recent_ctx = _short_term_svc._extract(messages, limit=limit_turn_pairs)
+    recent_pairs = [
+        TurnPairSchema(index=len(all_pairs) - len(recent_ctx.turn_pairs) + i, human=p.human, assistant=p.assistant)
+        for i, p in enumerate(recent_ctx.turn_pairs, start=1)
+    ]
 
     return ShortTermMemoryResponse(
         user_id=user_id,
         chat_id=chat_id,
         thread_id=thread_id,
-        turn_pairs=[TurnPairSchema(human=p.human, assistant=p.assistant) for p in ctx.turn_pairs],
-        formatted=ctx.format_for_prompt(),
+        all_turn_pairs=all_pairs,
+        total_turns=len(all_pairs),
+        recent_turn_pairs=recent_pairs,
+        context_window=limit_turn_pairs,
+        formatted=recent_ctx.format_for_prompt(),
         message_count=len(messages),
     )

@@ -17,12 +17,13 @@ class LongTermMemoryService:
     def __init__(self, store: BaseStore) -> None:
         self._store = store
 
-    async def load_profile(self, user_id: str, query: str) -> UserProfile:
+    async def load_profile(self, user_id: str, query: str = "") -> UserProfile:
         profile = UserProfile()
         try:
+            # Interests: vector-indexed on "company"/"interest" fields — asearch works
             namespace = ("users", user_id, "interests")
-            items = await self._store.asearch(namespace, query=query, limit=10)
-            for it in items:
+            all_items = await self._store.asearch(namespace, query=query or "company", limit=100)
+            for it in all_items:
                 val = it.value or {}
                 company = val.get("company") or val.get("ticker") or ""
                 interest = val.get("interest") or ""
@@ -31,20 +32,44 @@ class LongTermMemoryService:
                 if interest and interest not in profile.research_interests:
                     profile.research_interests.append(interest)
 
-            # Load preferences and identity from profile meta
-            meta_ns = ("users", user_id, "profile")
-            meta_items = await self._store.asearch(meta_ns, query="preferences", limit=1)
-            for it in meta_items:
-                val = it.value or {}
+            # Profile meta: NOT in the vector index (fields=["interest","company"] only)
+            # Use aget with exact key instead of asearch
+            meta_item = await self._store.aget(("users", user_id, "profile"), "meta")
+            if meta_item:
+                val = meta_item.value or {}
+                profile.name = val.get("name") or None
+                profile.surname = val.get("surname") or None
                 profile.preferences = val.get("preferences") or {}
                 profile.explicit_memories = val.get("explicit_memories") or []
-                if val.get("name"):
-                    profile.name = val["name"]
-                if val.get("surname"):
-                    profile.surname = val["surname"]
+                profile.topics = val.get("topics") or []
         except Exception as exc:
             logger.warning("load_profile failed for user %s: %s", user_id, exc)
         return profile
+
+    async def load_profile_with_raw(self, user_id: str, query: str = "") -> tuple[UserProfile, list[dict]]:
+        """Load profile + ALL raw store items (bypasses vector search via direct SQL)."""
+        from app.core.database import AsyncSessionLocal
+        from sqlalchemy import text
+
+        profile = await self.load_profile(user_id, query)
+        raw: list[dict] = []
+        try:
+            prefix_pattern = f"users.{user_id}.%"
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    text("SELECT prefix, key, value FROM store WHERE prefix LIKE :p ORDER BY prefix, key"),
+                    {"p": prefix_pattern},
+                )
+                for row in result.fetchall():
+                    ns_suffix = row[0].split(".")[-1]
+                    raw.append({
+                        "namespace": f"users/{user_id}/{ns_suffix}",
+                        "key": row[1],
+                        "value": row[2] if isinstance(row[2], dict) else {},
+                    })
+        except Exception as exc:
+            logger.warning("load_profile_with_raw SQL failed for user %s: %s", user_id, exc)
+        return profile, raw
 
     async def init_user(
         self,
