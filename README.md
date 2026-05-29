@@ -450,6 +450,14 @@ LangGraph (userId ✓, sessionId ✓)
 
 `langfuse_trace_id` is stored on every assistant `messages` row for audit.
 
+### Trace list — all observations per request
+
+![Langfuse trace list](docs/traces.png)
+
+### Trace detail — node spans + LLM generations
+
+![Langfuse trace detail with graph nodes and answer](docs/traces_v2.png)
+
 ---
 
 ## Tests
