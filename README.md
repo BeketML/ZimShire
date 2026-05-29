@@ -31,6 +31,8 @@
 
 ## Architecture
 
+> **Architecture diagram & DB schema (draw.io):** [Agent Architecture + DB Schema Chart](https://drive.google.com/file/d/16mht8X_s3yDwcIixr4UawR1Fdc47FMKk/view?usp=sharing)
+
 ### Two-process design
 
 ```mermaid
