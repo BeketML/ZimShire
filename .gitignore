@@ -5,6 +5,13 @@
 data/
 .claude/
 
+# ── AI editor config files ───────────────────────────────────────────────────
+CLAUDE.md
+claude.md
+.cursor/
+cursor.md
+Cursor.md
+
 # ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
