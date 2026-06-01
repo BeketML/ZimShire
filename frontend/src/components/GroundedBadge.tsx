@@ -15,9 +15,12 @@ export default function GroundedBadge({ grounded }: Props) {
   }
   if (grounded === false) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-900/40 text-amber-400 border border-amber-700/40">
-        <span>~</span>
-        <span>Partially grounded</span>
+      <span
+        className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-900/40 text-amber-400 border border-amber-700/40"
+        title="Letter claims in this answer are not confirmed by retrieved Buffett passages. Market and web content is illustrative only."
+      >
+        <span>!</span>
+        <span>Not confirmed by letters</span>
       </span>
     )
   }

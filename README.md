@@ -65,6 +65,18 @@ flowchart LR
 
 **Hard rule:** `app/` never imports from `mcp_server/`. All tool access goes through `MultiServerMCPClient` at runtime.
 
+### MCP surface: tools only (by design)
+
+The assignment allows choosing which MCP primitives to expose. ZimShire exposes **tools only** — no `@mcp.resource` or `@mcp.prompt` handlers.
+
+| Primitive | Exposed? | Rationale |
+|-----------|----------|-----------|
+| **Tools** | Yes | RAG (`search_buffett_letters`), market (yfinance), web (SerpApi DuckDuckGo), plus optional UI tools for IDE clients |
+| **Resources** | No | Letter corpus lives in Qdrant; static URIs would duplicate retrieval and go stale after re-ingest |
+| **Prompts** | No | Research prompts live in `app/core/prompts.py` and the LangGraph orchestrator; MCP clients call tools with their own queries |
+
+External clients (Cursor, Claude Code) get the same data plane as the API via stdio or HTTP on port 8001. Adding a resource or prompt later would be additive, not required for parity with the FastAPI app.
+
 ---
 
 ## LangGraph pipeline
@@ -175,15 +187,61 @@ python scripts/upload_to_qdrant.py \
 
 ### Faithfulness grounding
 
-`faithfulness_guardrail` evaluates the synthesized answer against retrieved passages via LLM. Strong-hit threshold: `similarity_score ≥ 0.40` (calibrated for `text-embedding-3-small`'s cosine scale — relevant passages score 0.35–0.55). The `grounded` flag and `sources` list in the `done` event come from this node.
+`faithfulness_guardrail` runs **after** `synthesizer` and `output_guardrail`. It evaluates the draft answer against retrieved letter passages (LLM JSON check; similarity fallback if the LLM call fails). Strong-hit threshold: `similarity_score ≥ 0.40` (calibrated for `text-embedding-3-small` — relevant passages often score 0.35–0.55). The `grounded` flag and `sources` list in the SSE `done` event come from this node.
+
+#### `grounded` semantics (three states)
+
+| Value | When | Meaning for clients |
+|-------|------|---------------------|
+| `true` | RAG ran and faithfulness passed | Letter-specific claims should be treated as supported by retrieved passages; see `sources` (year + passage + score) |
+| `false` | RAG ran but faithfulness failed (or zero chunks) | **Do not treat the answer as confirmed by Buffett's letters.** `sources` is empty. Any market/web lines in the same message are illustrative only — use at your own risk |
+| `null` | RAG was not invoked | Faithfulness was not evaluated (e.g. market-only or web-only turn). Not the same as “failed check” |
+
+#### Current behaviour (transparency flag — Variant A)
+
+Today, `grounded: false` is a **transparency flag**, not a content gate (same pattern as documented in `docs/assistant_flow.md`):
+
+1. The synthesizer may already have streamed tokens to the client.
+2. Faithfulness sets `grounded: false` and `sources: []` on the final `done` event.
+3. The UI shows an amber badge (“Not confirmed by letters”) so users do not mistake the text for letter-backed citations.
+
+**User-facing rule:** If `grounded === false`, do not rely on Buffett-letter claims in that message; treat market and web sections as unverified context unless you cross-check primary sources.
+
+#### Stricter alternative (Variant B — not implemented)
+
+A literal reading of the assignment (“return `grounded: false`, not a plausible-sounding hallucination”) would also **replace** the streamed answer when faithfulness fails:
+
+- After `faithfulness_guardrail`, if `grounded === false`, emit SSE `{"type":"replace","content":"..."}` (same mechanism as `output_guardrail` today).
+- Replace text with a short, honest fallback, e.g. insufficient letter support for this query; optionally retain only market/web facts that trace to `collected_context`.
+
+Variant B trades UX (user may see tokens then a replace) for stronger anti-hallucination guarantees. Variant A was chosen to avoid discarding useful market/web context when retrieval is weak; Variant B is the documented upgrade path if reviewers require hard blocking.
 
 ---
 
 ## Guardrails
 
+### Fail-open vs fail-closed (`FAIL_OPEN_ON_GUARDRAIL_ERROR`)
+
+Guardrail nodes call a small LLM (`gpt-4o-mini`). If that call **throws** (gateway down, timeout, parse error), behaviour depends on `.env`:
+
+| `FAIL_OPEN_ON_GUARDRAIL_ERROR` | On LLM failure | Typical use |
+|--------------------------------|----------------|-------------|
+| `true` (default) | **Fail-open** — allow the turn to continue | Demos, dev, degraded production (prefer serving research over hard outage) |
+| `false` | **Fail-closed** — input blocked; output/faithfulness treated as pass-through blocked where applicable | Stricter compliance posture |
+
+| Node | On success | On LLM failure (fail-open) | On LLM failure (fail-closed) |
+|------|------------|----------------------------|------------------------------|
+| **Input** | Block off-topic / injection / personalized advice | Query proceeds | Query blocked |
+| **Output** | Retry or safe rewrite on violation | Draft passes unchanged | Same as fail-open today (output still fail-open on error in code) |
+| **Faithfulness** | Set `grounded` + `sources` | Similarity-threshold fallback | Same fallback |
+
+**Note:** Output guardrail **always fail-open on LLM error** today (draft passes) — only input honours `FAIL_OPEN_ON_GUARDRAIL_ERROR` for failures. Safety violations detected successfully still trigger retry + `replace` SSE.
+
+For production hardening, consider fail-closed input (`false`) and fail-closed output on error (safe fallback instead of pass-through).
+
 ### Input
 
-LLM JSON classifier (`gpt-4o-mini`) checks for off-topic queries, prompt injection, personal investment advice. **Fails open** — if the LLM call throws, the query passes through to avoid blocking legitimate research during service degradation.
+LLM JSON classifier (`gpt-4o-mini`) checks for off-topic queries, prompt injection, personal investment advice. On block: graph ends early; client receives SSE `blocked` then `done` with `message_id: null`.
 
 ### Output
 
@@ -195,7 +253,7 @@ On violation: `feedback_message` written to state, graph retries `synthesizer` (
 
 ### Faithfulness
 
-Runs only when `rag_invoked=True`. LLM evaluates answer grounding; similarity fallback used if LLM throws. Sets `grounded: true/false/null` and populates `sources`.
+Runs only when `rag_invoked=True`. Sets `grounded: true/false/null` and populates `sources` when grounded. Does **not** emit `replace` on `grounded: false` (see Variant A vs B above). `guardrail_logs` may record `result="blocked"` for a failed faithfulness check — that means “ungrounded”, not “HTTP request blocked”.
 
 ---
 
@@ -426,7 +484,10 @@ zimshire/
 | **Real-time streaming via `stream_mode=["messages","values"]`** | LangGraph 1.2.2 dual-mode: tokens streamed as they're generated; `"values"` updates drive progress events at stage boundaries | Guardrail may rewrite after tokens stream — client handles `replace` event |
 | **Semantic cache at cosine 0.92** | High threshold prevents false positives; near-identical queries get instant responses | Paraphrased versions of the same question miss the cache |
 | **`grounded=null` for non-RAG answers** | Faithfulness undefined for market/web-only answers; distinguishes "not checked" from "failed check" | Client must handle three states: `true`, `false`, `null` |
+| **`grounded=false` = transparency (Variant A)** | Users still get synthesis + market/web context when retrieval is weak; UI badge warns not to trust letter claims | Stricter assignment reading wants Variant B (`replace` + honest short text); documented as future path |
+| **MCP tools only** | Assignment leaves resources/prompts optional; tools cover RAG, market, web | No static letter resources or canned MCP prompt templates for IDE clients |
 | **MCP as separate process** | External clients (Cursor, Claude Code) use the same tools; yfinance blocking calls don't block the async FastAPI event loop | Extra network hop per subagent call; RAG search over MCP adds ~20–30s per query |
+| **Guardrails fail-open by default** | `FAIL_OPEN_ON_GUARDRAIL_ERROR=true` keeps the API usable when the guardrail model is down | Jailbreak or advice requests may slip through during outages; set `false` for stricter input blocking |
 
 ---
 

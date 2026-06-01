@@ -80,7 +80,8 @@ export default function MessageBubble({ message, onShowSources }: Props) {
 
         {/* Footer: grounded badge + sources button */}
         {!message.isStreaming && !message.isBlocked && !message.isError && message.content && (
-          <div className="flex items-center gap-3 mt-3 flex-wrap">
+          <div className="flex flex-col gap-2 mt-3">
+            <div className="flex items-center gap-3 flex-wrap">
             <GroundedBadge grounded={message.grounded} />
             {message.sources.length > 0 && (
               <button
@@ -89,6 +90,13 @@ export default function MessageBubble({ message, onShowSources }: Props) {
               >
                 {message.sources.length} source{message.sources.length !== 1 ? 's' : ''} →
               </button>
+            )}
+            </div>
+            {message.grounded === false && (
+              <p className="text-xs text-amber-400/90 font-mono leading-relaxed max-w-xl">
+                This reply is not backed by retrieved letter passages. Do not treat Buffett quotes or
+                letter-era claims as verified; market and web details are at your own risk.
+              </p>
             )}
           </div>
         )}
