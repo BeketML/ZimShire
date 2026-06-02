@@ -542,7 +542,9 @@ pytest tests/ -v   # 44 tests, ~10s
 
 ZimShire today covers **short-term** context (LangGraph checkpointer + last N turn pairs) and a **lightweight long-term** profile (`AsyncPostgresStore`: tracked companies, research interests). The optional bonus in the assignment (“agent remembers tracked companies and research interests across sessions”) is partially met, but it does not provide structured fact evolution, supersession chains, or token-budgeted recall across many sessions.
 
-A natural upgrade is to plug in an external **Memory Service** — a Dockerized HTTP microservice (port **8080**) that ingests conversation turns, extracts structured knowledge, handles fact corrections via supersession, and answers recall queries with hybrid retrieval plus a 3-tier context assembler.
+A natural upgrade is to plug in an external **[Memory Service](https://github.com/BeketML/memory-service)** — a Dockerized HTTP microservice (port **8080**) that ingests conversation turns, extracts structured knowledge, handles fact corrections via supersession, and answers recall queries with hybrid retrieval plus a 3-tier context assembler.
+
+**Repository:** [https://github.com/BeketML/memory-service](https://github.com/BeketML/memory-service)
 
 ### What Memory Service adds over current ZimShire memory
 
@@ -588,7 +590,7 @@ flowchart LR
 ### Quick start (Memory Service standalone)
 
 ```bash
-git clone <memory-service-repo> memory-service
+git clone https://github.com/BeketML/memory-service.git memory-service
 cd memory-service && cp .env.example .env
 # OPENAI_API_KEY required for extraction + query dense embeddings
 
