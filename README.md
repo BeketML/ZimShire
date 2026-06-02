@@ -535,3 +535,92 @@ pytest tests/ -v   # 44 tests, ~10s
 | `test_tool_registry.py` | 5 | ToolRegistry CRUD + tag filtering |
 | `test_subagent_registry.py` | 5 | SubagentRegistry + runner |
 | `test_orchestrator_routing.py` | 5 | Route functions + short-term memory |
+
+---
+
+## Future improvements: Memory Service integration
+
+ZimShire today covers **short-term** context (LangGraph checkpointer + last N turn pairs) and a **lightweight long-term** profile (`AsyncPostgresStore`: tracked companies, research interests). The optional bonus in the assignment (“agent remembers tracked companies and research interests across sessions”) is partially met, but it does not provide structured fact evolution, supersession chains, or token-budgeted recall across many sessions.
+
+A natural upgrade is to plug in an external **Memory Service** — a Dockerized HTTP microservice (port **8080**) that ingests conversation turns, extracts structured knowledge, handles fact corrections via supersession, and answers recall queries with hybrid retrieval plus a 3-tier context assembler.
+
+### What Memory Service adds over current ZimShire memory
+
+| Capability | ZimShire today | Memory Service |
+|------------|----------------|----------------|
+| Stable user facts (employer, city, preferences) | Flat JSON lists in Postgres store | Normalized keys (`location.city`, `employment.employer`), DB-enforced single active fact per key |
+| Fact corrections (“I moved to Berlin”) | Overwrite / append interests | Supersession chain: deactivate old row → insert new; full history via `GET /users/{id}/memories` |
+| Recall for next agent turn | `load_memory` + short-term formatting | `POST /recall` — Tier 1 (PG facts) + Tier 2 (Qdrant hybrid + ColBERT) + Tier 3 (recent session turns), greedy `max_tokens` budget |
+| Retrieval | N/A for user profile | BGE-M3 dense + sparse + ColBERT; optional query rewrite for multi-hop |
+| Durability | In-graph store namespace | Postgres = system of record; Qdrant = rebuildable derived index |
+
+### Memory Service architecture (summary)
+
+```mermaid
+flowchart LR
+    ZS[ZimShire FastAPI / LangGraph]
+    MS[Memory Service :8080]
+    PG[(Postgres 16)]
+    QD[(Qdrant memories)]
+
+  ZS -->|POST /turns after each turn| MS
+  ZS -->|POST /recall before synthesizer| MS
+  MS --> PG
+  MS --> QD
+```
+
+- **Write path (`POST /turns`)**: flatten messages → persist turn → LLM extraction (gpt-4o-mini) → reconcile per candidate (insert / bump confidence / supersede) → BGE-M3 embed → Qdrant upsert → `201`. Postgres commit precedes Qdrant; `503` on Qdrant failure so caller can retry; `/admin/reindex` heals drift.
+- **Read path (`POST /recall`)**: Tier 1 stable facts from Postgres (always, up to ~50% of budget) → Tier 2 query-relevant memories from Qdrant (RRF + ColBERT rerank, relevance floor 0.3) → Tier 3 recent session turns → markdown context + citations. Cold / off-topic → `200 {"context":"","citations":[]}` (no hallucination).
+- **Backing stores**: Postgres owns correctness (partial unique index on active facts); Qdrant owns semantic relevance (rebuildable from PG).
+
+### Suggested integration points in ZimShire
+
+1. **After each completed turn** (in `persist_assistant_turn` or graph `END`):  
+   `POST http://memory-service:8080/turns` with `{session_id: chat_id, user_id, messages: [human, assistant], timestamp, metadata}`.
+
+2. **Before orchestrator / synthesizer** (replace or augment `load_memory`):  
+   `POST /recall` with `{query, session_id: chat_id, user_id, max_tokens: 512}` → inject `context` into synthesizer system prompt under `## User memory`.
+
+3. **Optional MCP tool** in `mcp_server/`: `recall_user_memory(query, user_id)` wrapping `/recall` for IDE clients.
+
+4. **Docker Compose**: add `memory-service` service; point `MEMORY_SERVICE_URL` in ZimShire `.env`; reuse existing Postgres/Qdrant only if configured (`QDRANT_URL` to shared instance — otherwise bundled volumes in the memory-service stack).
+
+### Quick start (Memory Service standalone)
+
+```bash
+git clone <memory-service-repo> memory-service
+cd memory-service && cp .env.example .env
+# OPENAI_API_KEY required for extraction + query dense embeddings
+
+docker compose up -d
+until curl -sf http://localhost:8080/health; do sleep 2; done
+
+curl -s http://localhost:8080/health
+# → {"status":"ok"}
+
+curl -X POST http://localhost:8080/turns -H 'Content-Type: application/json' -d '{
+  "session_id": "smoke-1", "user_id": "user-1",
+  "messages": [
+    {"role":"user","content":"I just moved to Berlin from NYC."},
+    {"role":"assistant","content":"Berlin is a great city."}
+  ],
+  "timestamp": "2025-03-15T10:30:00Z", "metadata": {}
+}'
+
+curl -X POST http://localhost:8080/recall -H 'Content-Type: application/json' -d '{
+  "query": "Where does this user live?",
+  "session_id": "smoke-2", "user_id": "user-1", "max_tokens": 512
+}'
+# → context mentions Berlin; may note move from NYC
+```
+
+### Tradeoffs to expect
+
+| Topic | Note |
+|-------|------|
+| Latency | `/turns` is synchronous (LLM + embed inline); budget ~3–8s per turn; run async fire-and-forget from ZimShire if UX-sensitive |
+| Keys | Extraction quality depends on consistent normalized keys (`location.city`, etc.) |
+| Scope | Memories are **user-scoped** across sessions (intentional); session-scoped only for anonymous `user_id: null` |
+| Ops | Two extra containers (or shared PG/Qdrant); `POST /admin/reindex` after Qdrant outages |
+
+This integration would supersede the current `chat_history/long_term` extraction path for production-grade cross-session personalization while keeping Buffett-letter RAG and market/web subagents unchanged.
