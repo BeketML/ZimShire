@@ -473,6 +473,183 @@ zimshire/
 
 ---
 
+## How to read this codebase
+
+Read in the order below to follow **one user question** from the browser through Postgres, LangGraph, MCP, Qdrant, and back. Each step names one file (or a small group) and what you should understand before moving on.
+
+**Supplementary docs** (after the main path): `docs/api_endpoints.md`, `docs/agent_architecture.md`, `docs/assistant_flow.md`, `docs/mcp_tools_reference.md`.
+
+### End-to-end path (keep this in mind)
+
+```text
+Browser (frontend)
+  → POST /chats/{id}/messages (SSE)
+  → TurnOrchestrationService.stream_turn
+  → LangGraph (guardrails → cache → memory → planner → subagents → synthesizer → guardrails)
+  → MCP HTTP :8001 (RAG / market / web tools)
+  → Qdrant + yfinance + SerpApi
+  → persist messages + rag_retrievals + guardrail_logs
+  → SSE done { grounded, sources, langfuse_trace_id }
+```
+
+---
+
+### Part 1 — `app/` (FastAPI + LangGraph)
+
+#### 1.1 Bootstrap and configuration
+
+| # | File | What to learn |
+|---|------|----------------|
+| 1 | `app/main.py` | FastAPI app, `lifespan`: `init_mcp_client` → `init_graph`; routers; `/health` |
+| 2 | `app/core/config.py` | All env knobs: models, thresholds, URLs |
+| 3 | `app/core/database.py` | Async SQLAlchemy session factory |
+| 4 | `app/core/dependencies.py` | `get_db` for routes |
+| 5 | `app/core/exceptions.py` | `NotFoundError`, `ForbiddenError` |
+| 6 | `app/core/providers.py` | `ConfigProvider` / `LLMProvider` protocols |
+| 7 | `app/services/llm.py` | LiteLLM gateway via `ChatOpenAI` |
+| 8 | `app/services/embedding.py` | `embed_text()` for semantic cache |
+| 9 | `app/services/langfuse_service.py` | Callback handler, trace id, flush |
+
+#### 1.2 Data model and HTTP surface
+
+| # | File | What to learn |
+|---|------|----------------|
+| 10 | `app/models/models.py` | Tables: `users`, `chats`, `messages`, `semantic_cache`, `rag_retrievals`, `guardrail_logs`, … |
+| 11 | `alembic/versions/*.py` | Schema evolution (read latest migration after models) |
+| 12 | `app/api/router.py` | Which routers are mounted |
+| 13 | `app/api/deps.py` | `get_turn_service`, repos, providers |
+| 14 | `app/api/health.py` | Postgres / Qdrant / MCP checks |
+| 15 | `app/modules/users/router.py` + `repository.py` + `schemas.py` | User CRUD |
+| 16 | `app/modules/chats/router.py` + `service.py` + `repository.py` | Chat sessions; `thread_id` = `chat_id` |
+| 17 | `app/modules/messages/schemas.py` | `MessageCreate`, SSE-shaped history |
+| 18 | `app/modules/messages/router.py` | `GET` history, `POST` → `StreamingResponse` |
+| 19 | `app/modules/chat_history/router.py` | Long-term profile + short-term debug endpoints |
+| 20 | `app/modules/inspect/router.py` | Debug: semantic cache, RAG rows, guardrail logs |
+
+#### 1.3 The research turn (core product path)
+
+| # | File | What to learn |
+|---|------|----------------|
+| 21 | `app/modules/messages/turn_service.py` | **Main orchestration**: graph `astream`, SSE events (`progress`, `token`, `replace`, `blocked`, `done`) |
+| 22 | `app/modules/messages/service.py` | `persist_assistant_turn`: DB write, RAG rows, memory extraction |
+| 23 | `app/modules/messages/repository.py` | Human/assistant message persistence |
+| 24 | `app/modules/messages/commands.py` + `handlers.py` | Command-style side effects (if used from persist path) |
+
+Read `turn_service.py` together with the graph — it is the bridge between HTTP and LangGraph.
+
+#### 1.4 LangGraph runtime
+
+| # | File | What to learn |
+|---|------|----------------|
+| 25 | `app/modules/agents/runtime/graph_factory.py` | `AsyncPostgresSaver` + `AsyncPostgresStore` setup |
+| 26 | `app/modules/agents/runtime/service.py` | `init_graph` / `get_graph` / `get_store` |
+| 27 | `app/modules/agents/runtime/mcp_client.py` | `MultiServerMCPClient` → MCP HTTP |
+| 28 | `app/modules/agents/graph/state.py` | `ZimShireState` fields |
+| 29 | `app/modules/agents/graph/schemas.py` | `OrchestratorPlan`, `SubagentPlanItem`, `SubagentResult` |
+| 30 | `app/modules/agents/graph/builder.py` | Node list and edges (topology) |
+| 31 | `app/modules/agents/graph/routing.py` | Conditional routes after input / cache / output guardrail |
+| 32 | `app/core/prompts.py` | All system prompts (planner, subagents, guardrails, memory) |
+
+#### 1.5 Pipeline nodes (read in graph execution order)
+
+| # | File | Node | What to learn |
+|---|------|------|----------------|
+| 33 | `app/modules/agents/pipeline/preflight.py` | `input_guardrail`, `semantic_cache_check`, `load_memory` | Block / cache hit / user profile |
+| 34 | `app/modules/agents/pipeline/planning.py` | `orchestrator` | Structured plan: which subagents run |
+| 35 | `app/modules/agents/pipeline/research/registry.py` | — | Maps `rag` / `market` / `web` → runner functions |
+| 36 | `app/modules/agents/pipeline/research/runner.py` | `run_subagents` | `asyncio.gather` parallel subagents |
+| 37 | `app/modules/agents/pipeline/research/subagents.py` | — | Thin wrappers per agent type |
+| 38 | `app/modules/agents/pipeline/research/react.py` | — | ReAct loop: LLM + MCP tool calls |
+| 39 | `app/modules/agents/mcp/allowlists.py` | — | Tag filters (`rag`, `market`, `web`) |
+| 40 | `app/modules/agents/mcp/registry.py` | — | Tool registry from MCP client |
+| 41 | `app/modules/agents/mcp/wrappers.py` | — | Market cache wrapper around tools |
+| 42 | `app/modules/agents/pipeline/synthesis.py` | `synthesizer` | `llm.astream` → `draft_answer` |
+| 43 | `app/modules/agents/pipeline/safety.py` | `output_guardrail`, `faithfulness_guardrail` | Safety rewrite + `grounded` / `sources` |
+
+#### 1.6 Supporting modules (after you know the graph)
+
+| # | File | What to learn |
+|---|------|----------------|
+| 44 | `app/modules/cache/gateways.py` + `semantic_cache_repo.py` | Semantic cache lookup/write |
+| 45 | `app/modules/guardrails/gateways.py` + `repository.py` | Guardrail audit logs |
+| 46 | `app/modules/rag_retrievals/repository.py` | Persist chunks used in a turn |
+| 47 | `app/modules/chat_history/short_term/service.py` | Format recent turns for synthesizer |
+| 48 | `app/modules/chat_history/long_term/service.py` + `extraction.py` | `AsyncPostgresStore` profile updates |
+| 49 | `app/modules/cache/market_cache_repo.py` | TTL cache for yfinance payloads |
+
+---
+
+### Part 2 — `mcp_server/` (tools process)
+
+Read **after** `app/modules/agents/runtime/mcp_client.py` — the API never imports this package; it only calls it over HTTP.
+
+| # | File | What to learn |
+|---|------|----------------|
+| 1 | `mcp_server/main.py` | Entry point: stdio vs `streamable-http` on :8001 |
+| 2 | `mcp_server/core/mcp.py` | FastMCP instance |
+| 3 | `mcp_server/core/config.py` | Qdrant URL, embedding models, SerpApi key |
+| 4 | `mcp_server/rag/tools.py` | `search_buffett_letters` |
+| 5 | `mcp_server/rag/embeddings.py` | Dense / sparse / ColBERT embedders |
+| 6 | `mcp_server/rag/qdrant.py` | Hybrid search + rerank in Qdrant |
+| 7 | `mcp_server/market/tools.py` | yfinance tools (`async` + executor) |
+| 8 | `mcp_server/search/tools.py` | `web_search*` via SerpApi |
+| 9 | `mcp_server/search/models.py` | Response shapes |
+| 10 | `mcp_server/ui/*.py` | Optional IDE UI tools (DataTable); not used by API graph |
+
+**Offline ingest** (how Qdrant gets data): `scripts/letters_ingestion.py` → `scripts/semantic_chunk_letters.py` → `scripts/upload_to_qdrant.py`.
+
+---
+
+### Part 3 — `frontend/` (React UI)
+
+Read **after** `docs/api_endpoints.md` or `app/modules/messages/router.py` so SSE event types are familiar.
+
+| # | File | What to learn |
+|---|------|----------------|
+| 1 | `frontend/src/main.tsx` | React root |
+| 2 | `frontend/src/types/index.ts` | `Message`, `Source`, `Grounded`, `Chat` |
+| 3 | `frontend/src/api/client.ts` | Base URL, fetch wrapper |
+| 4 | `frontend/src/api/users.ts` | `POST /users` |
+| 5 | `frontend/src/api/chats.ts` | `POST /chats` |
+| 6 | `frontend/src/api/messages.ts` | **SSE parser**: `progress`, `token`, `replace`, `blocked`, `done` |
+| 7 | `frontend/src/api/health.ts` | Health poll for header badge |
+| 8 | `frontend/src/hooks/useUser.ts` | Anonymous user id in `localStorage` |
+| 9 | `frontend/src/hooks/useChat.ts` | Chats list, `streamMessage`, streaming state machine |
+| 10 | `frontend/src/App.tsx` | Layout: sidebar + thread |
+| 11 | `frontend/src/components/Sidebar.tsx` | Chat list |
+| 12 | `frontend/src/components/ChatThread.tsx` | Message list + input |
+| 13 | `frontend/src/components/MessageBubble.tsx` | Markdown, sources, grounded disclaimer |
+| 14 | `frontend/src/components/GroundedBadge.tsx` | `true` / `false` / `null` badges |
+| 15 | `frontend/src/components/SourcesPanel.tsx` | Letter citations drawer |
+| 16 | `frontend/src/components/QueryInput.tsx` | Send / stop |
+| 17 | `frontend/nginx.conf` | `/api` proxy, `proxy_buffering off` for SSE |
+
+---
+
+### Part 4 — Optional (tests, ops, infra)
+
+| Area | Where to look |
+|------|----------------|
+| **Unit / integration tests** | `tests/test_streaming.py`, `test_guardrails.py`, `test_api_integration.py` |
+| **Docker** | `docker-compose.yaml`, `Dockerfile`, `scripts/start_api.sh` |
+| **LangGraph tables** | `scripts/setup_langgraph_tables.py` |
+| **DB reference** | `docs/db_schema_reference.md`, `init.sql` |
+
+---
+
+### Suggested reading sessions
+
+| Session | Focus | Time (rough) |
+|---------|--------|----------------|
+| **A** | Steps 1–20 (`app` HTTP + DB) | ~45 min |
+| **B** | Steps 21–43 (turn + LangGraph + pipeline) | ~90 min |
+| **C** | Part 2 `mcp_server` + `scripts/` ingest | ~45 min |
+| **D** | Part 3 `frontend` + one live SSE trace in DevTools | ~30 min |
+
+After session **B**, set a breakpoint (or log) in `turn_service.py` and send one query from the UI — you should recognize every node name from `builder.py`.
+
+---
+
 ## Key design decisions
 
 | Decision | Rationale | Tradeoff |
