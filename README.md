@@ -641,10 +641,10 @@ Read **after** `docs/api_endpoints.md` or `app/modules/messages/router.py` so SS
 
 | Session | Focus | Time (rough) |
 |---------|--------|----------------|
-| **A** | Steps 1–20 (`app` HTTP + DB) | ~45 min |
-| **B** | Steps 21–43 (turn + LangGraph + pipeline) | ~90 min |
-| **C** | Part 2 `mcp_server` + `scripts/` ingest | ~45 min |
-| **D** | Part 3 `frontend` + one live SSE trace in DevTools | ~30 min |
+| **A** | Steps 1–20 (`app` HTTP + DB) | 
+| **B** | Steps 21–43 (turn + LangGraph + pipeline) | 
+| **C** | Part 2 `mcp_server` + `scripts/` ingest | 
+| **D** | Part 3 `frontend` + one live SSE trace in DevTools | 
 
 After session **B**, set a breakpoint (or log) in `turn_service.py` and send one query from the UI — you should recognize every node name from `builder.py`.
 
